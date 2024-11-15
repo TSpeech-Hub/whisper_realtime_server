@@ -5,6 +5,7 @@ __pycache__/
 
 # personal
 resources/*
+*.txt
 
 # C extensions
 *.so
