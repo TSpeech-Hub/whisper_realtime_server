@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from whisper_online import *
 import sounddevice as sd
 import numpy as np
 import socket, threading, re, sys 
@@ -15,47 +14,6 @@ class AudioConfig:
 class NetConfig:
     host = 'localhost'
     port = 12001
-
-class TextParser:
-
-    def __init__(self, size):
-        self.__buffer = ""
-        self.__size = size 
-        self.__strong_ends = '[.]+' # for now only . is a strong end  
-
-    def parse_periods(self, input): # not sophisticated just for the demo 
-        """
-        parse the text using the buffer, returning full periods (e.g. two sequences ending with a point
-        if there is one, or [] if there is not a full period yet or the text is empty.
-        if buffer is bigger than size returns the buffer content + text as a full period 
-        Input: input is expected in the whisper server output form NNNNN MMMMM text, for now the parser will throw away the int values 
-        """
-        i = 0
-        periods = []
-        text = input.split(' ', 2)[2] # NNNNN MMMMM text 
-        while i < len(text):
-            match = re.search(self.__strong_ends, text) 
-            if match == None: # add the unfinished period to buffer 
-                self.__buffer += text[i:]
-                break 
-            else: # return the period and flush buffer 
-                periods.append(self.__buffer + text[i:(match.end())].strip())
-                i = match.end()
-                text = text[i:(match.end())]
-                self.__buffer = "" 
-        
-        if len(self.__buffer) > self.__size:
-            periods.append(self.__buffer.strip())
-            self.__buffer = "" 
-        return periods
-
-    def force_flush(self): 
-        out = self.__buffer.strip()
-        self.__buffer = ""
-        return out 
-    
-    def get_strong_ends(self):
-        return self.__strong_ends
 
 class TranscriptorClient:
  
@@ -83,11 +41,10 @@ class TranscriptorClient:
     def __receive_transcriptions(self, sock):
         """Receive transcriptions from the server."""
         try:
-            parser = TextParser(40) # will be used in future
             while True:
                 response = sock.recv(1024).decode('utf-8').strip()
                 text = response.split(' ', 2)[2].strip() # NNNNN MMMMM text
-                if re.search(parser.get_strong_ends(), text) == None: 
+                if re.search('[.]+', text) == None: 
                     sys.stdout.write(text + " ")
                 else: 
                     sys.stdout.write(text + "\n")
