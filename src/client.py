@@ -14,8 +14,7 @@ class AudioConfig:
 @dataclass
 class NetConfig:
     host = 'localhost'
-    port = 12001
-
+    port = 8000
 
 class TranscriptorClient:
  
@@ -27,6 +26,28 @@ class TranscriptorClient:
     @staticmethod 
     def __log(msg):
         sys.stdout.write(f"\033[96m" + msg + "\033[0m\n")
+
+    def connect_to_server(self, host, port):
+        """Connect to the main server and get the Whisper server port."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.connect((host, port))
+                print(f"Connected to main server at {host}:{port}")
+                
+                status = s.recv(1024).decode('utf-8').strip()
+                if status == "ok":
+                    print("Server allocating resources...")
+                    # Wait for the Whisper server port
+                    whisper_port = s.recv(1024).decode('utf-8').strip()
+                    if whisper_port.isdigit():
+                        print(f"Whisper server ready on port: {whisper_port}")
+                        return int(whisper_port)
+                    else:
+                        print(f"Error: {whisper_port}")
+                else:
+                    print(f"Server response: {status}")
+        except Exception as e:
+            print(f"Error connecting to server: {e}")
 
     def __send_audio(self, stream, sock):
         """Capture audio from the microphone and send it to the server."""
@@ -54,14 +75,14 @@ class TranscriptorClient:
         except Exception as e:
             TranscriptorClient.__error(f"Error in receiving transcription: {e}")
 
-    def start(self):
+    def start(self, port):
         """Initialize the microphone stream and handle client-server communication."""
         try:
             # Initialize microphone
             with sd.InputStream(callback=None, channels=1, samplerate=AudioConfig.sample_rate, blocksize=AudioConfig.chunk_size) as stream:
                 # Connect to the server
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.connect((NetConfig.host, NetConfig.port))
+                    s.connect((NetConfig.host, port))
                     TranscriptorClient.__log(f"Connected to server at {NetConfig.host}:{NetConfig.port}")
                     
                     sender_thread = threading.Thread(target=self.__send_audio, args=(stream, s), daemon=True)
@@ -72,10 +93,11 @@ class TranscriptorClient:
                     while sender_thread.is_alive() and receiver_thread.is_alive(): 
                         threading.Event().wait(0.1)
         except KeyboardInterrupt : 
-            print(f"mean time to responde {self.mean_time / self.n_responses}")
+            print(f"mean time to respond {self.mean_time / self.n_responses}")
         except Exception as e:
             TranscriptorClient.__error(f"Error {e}")
 
 if __name__ == "__main__":
     client = TranscriptorClient()
-    client.start()
+    port = client.connect_to_server(NetConfig.host, NetConfig.port)
+    client.start(port)
