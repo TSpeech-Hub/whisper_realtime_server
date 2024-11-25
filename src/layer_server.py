@@ -132,14 +132,6 @@ class LayerServer:
 
     #TODO: refactoring
     def handle_client(self, client_socket):
-        #NOTE: This function is called in a separate thread for each client to reduce code duplication
-        def closing():
-            client_socket.close()
-            with self.lock:
-                self.logger.info("A whisper instance just closed.")
-                self.active_clients -= 1
-                self.logger.info(f"current active clients: {self.active_clients}")
-
         #NOTE: if set to true that means the client handler already incremented connected client number in case of exception, decrement the number of active clients
         increment = False
         try:
@@ -173,12 +165,19 @@ class LayerServer:
             else:
                 client_socket.sendall(b"server not ready")
 
-            closing()
-
         except Exception as e:
             self.logger.error(f"Error handling client: {e}")
             client_socket.sendall(b"internal server error")
-            if increment: closing()
+
+        finally:
+            client_socket.close()
+            if increment: 
+                #NOTE: This function is called in a separate thread for each client to reduce code duplication
+                client_socket.close()
+                with self.lock:
+                    self.logger.info("A whisper instance just closed.")
+                    self.active_clients -= 1
+                    self.logger.info(f"current active clients: {self.active_clients}")
 
 
     def start(self):
