@@ -1,36 +1,21 @@
 #!/usr/bin/env python3
 import logging, os, threading, socket
 from whisper_online import *
-from whisper_online_server import *
+from whisper_online_server import * 
 from datetime import datetime
 from argparse import Namespace
 
-#NOTE: Connection args definition for Whisper Streaming factory
-#TODO: Do this with a json given to the LayerServer class
-class WhisperStreamingConfig:
-    @staticmethod
-    def get_default():
-        return Namespace(
-            warmup_file="../resources/sample1.wav",
-            host="localhost",
-            port=43007,
-            model="large-v3-turbo",
-            backend="faster-whisper",
-            language="en",
-            min_chunk_size=1.0,
-            model_cache_dir=None,
-            model_dir=None,
-            lan="en",
-            task="transcribe",
-            vac=False,
-            vac_chunk_size=0.04,
-            vad=False,
-            buffer_trimming="segment",
-            buffer_trimming_sec=15,
-            log_level="DEBUG"
-        )
+import json  
+from argparse import Namespace
+from datetime import datetime
+"""
+The functionality of both dictionaries and defaultdict is almost the same except for the fact that defaultdict never raises a KeyError. 
+It provides a default value for the key that does not exist.
+"""
+from collections import defaultdict
 
-#NOTE: Logging Setup
+#NOTE: LOGGING SETUP FUNCTION
+
 def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
     logger = logging.getLogger(log_name)
     logger.setLevel(logging.DEBUG)
@@ -55,150 +40,175 @@ def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
     return logger
 
 
-#NOTE: Connection class definition
-class WhisperServer:
+#NOTE: CONNECTION CLASS DEFINITION
 
-    def __init__(self, host, port, ready_event, logger):
-        self.port = port
-        self.host = host
-        self.samplig_rate = 16000
-        self.ready_event = ready_event
-        self.logger = logger
-        self.args = WhisperStreamingConfig.get_default() #NOTE: Args for the Whisper factory
+class WhisperServer: 
+   
+    CONFIG_FILE = "config.json"
 
-    def __warmup(self):
-        self.logger.info("Starting warmup process...")
-        asr, online = asr_factory(self.args)
+    def __init__(self, port, host):
+        with open(self.CONFIG_FILE) as file:
+            config_dict = json.load(file)  
+        config_dict["port"] = port
+        config_dict["host"] = host 
+        self.is_available = True
+        self.logger = setup_logging(f"WhisperServer-{port}")
+        try:
+            self.config = Namespace(**config_dict)  # This converts dictionary to Namespace 
+            self.asr, self.online = asr_factory(self.config)
+        except Exception as e:
+            msg = f"Error during ASR initialization {e} check the config file config.json"
+            self.logger.error(msg)
+            raise type(e)(msg)
 
+    def warmup(self): 
+        """
+        original repo warmup code,
+        warm up the ASR because the very first transcribe takes more time than the others. 
+        Test results in https://github.com/ufal/whisper_streaming/pull/81
+        """
         msg = "Whisper is not warmed up. The first chunk processing may take longer."
-        if self.args.warmup_file:
-            if os.path.isfile(self.args.warmup_file):
-                self.logger.info(f"Warmup file found: {self.args.warmup_file}")
-                a = load_audio_chunk(self.args.warmup_file, 0, 1)
-                asr.transcribe(a)
+        if self.config.warmup_file:
+            if os.path.isfile(self.config.warmup_file):
+                a = load_audio_chunk(self.config.warmup_file,0,1)
+                try:
+                    self.asr.transcribe(a)
+                except Exception as e:
+                    msg = f"Error during ASR initialization {e} check the config file config.json"
+                    self.logger.error(msg)
+                    raise type(e)(msg)
                 self.logger.info("Whisper is warmed up.")
-                return asr, online
             else:
-                self.logger.critical("The warm up file is not available. " + msg)
-                raise FileNotFoundError("The warm up file is not available.")
+                self.logger.critical("The warm up file is not available. "+msg)
+                sys.exit(1)
         else:
             self.logger.warning(msg)
-            return asr, online
 
-    #WARNING: blocking function
-    def start(self): 
-        self.logger.info("Starting WhisperServer...")
-        _, online = self.__warmup()
-        self.logger.info(f"{online} online, {self.args.model} model")
+    #WARNING: blocking function. server loop
+    #NOTE: startup code from whisper_online_server.py original code repo
+    #TODO: Connect only on known clients iptables?
+    def start_server_loop(self): 
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                self.logger.info(f'Starting server {self.config.host} {self.config.port}')
+                s.bind((self.config.host, self.config.port))
+                s.listen(1)
+                self.logger.info(f'Server started {self.config.host} {self.config.port}')
+                while True:
+                    try:
+                        conn, addr = s.accept()
+                        self.is_available = False
+                        self.logger.info(f'Connected to client on {addr}')
+                        connection = Connection(conn)
+                        proc = ServerProcessor(connection, self.online, self.config.min_chunk_size, self.logger)
+                        proc.process()
+                        self.logger.info('Connection to client closed')
+                        conn.close()
+                    except (ConnectionAbortedError, ConnectionResetError) as e:
+                        self.logger.error(f"Connection error: {e}")
+                    finally: 
+                        self.is_available = True
+        except Exception as e:
+            self.logger.error(f"Error during server binding: {e}")
+            raise type(e)(f"Error during server binding: {e} check the config file config.json")
+                
 
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((self.host, self.port))
-            s.listen(1)
-            self.logger.info(f"Listening on {self.host}:{self.port}")
+#NOTE: LAYERSERVER CLASS DEFINITION 
 
-            # Signal that the server is ready to accept connections
-            self.ready_event.set()
-
-            try:
-                s.settimeout(30)  # 30 seconds timeout to avoid blocking resources
-                conn, addr = s.accept()
-                self.logger.info(f"Connected to client on {addr}")
-                connection = Connection(conn)
-                proc = ServerProcessor(connection, online, self.args.min_chunk_size, self.logger)
-                proc.process()
-                conn.close()
-                self.logger.info("Connection to client closed")
-            except socket.timeout:
-                self.logger.info("Timeout reached. Closing server.")
-
-#NOTE: LayerServer class definition
 #TODO: Fix The terminate called without an active exception and then abort core dump issue with delayed whisper servers crash
 class LayerServer:
-    def __init__(self, host="0.0.0.0", port=8000, max_clients=2, logger=setup_logging("LayerServer", use_stdout=True)):
+    def __init__(self, host="0.0.0.0", port=8000, max_servers=2, logger=setup_logging("LayerServer", use_stdout=True), port_pool=range(8001, 8100)):
         """Initialize the LayerServer with host, port, and max client limit."""
         self.host = host
         self.port = port
-        self.max_clients = max_clients
         self.logger = logger
-        self.active_clients = 0
+        self.max_servers = max_servers
+        self.servers = []
+        self.port_pool = port_pool
         self.lock = threading.Lock()
 
-    @staticmethod
-    def find_free_port():
+    def find_free_port(self):
         """Find a free port on the system."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('', 0))
-            return s.getsockname()[1]
+        for port in self.port_pool:
+            if port not in [server.config.port for server in self.servers]:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    try:
+                        s.bind(("localhost", port))
+                        return port
+                    except:
+                        pass
+        raise Exception("No free port available.") #TODO: custom exception
 
-    #TODO: refactoring
+    def create_servers(self):
+        """
+        create all the WhisperServer instances
+        and start them in separate threads.
+        """
+        for _ in range(self.max_servers):
+            free_port = self.find_free_port()
+            server = WhisperServer(free_port, self.host)
+            server.warmup() #NOTE: warmup the ASR
+            threading.Thread(target=server.start_server_loop, daemon=True).start()
+            self.servers.append(server)
+            self.logger.info(f"WhisperServer started on port {free_port}")
+
     def handle_client(self, client_socket):
-        #NOTE: if set to true that means the client handler already incremented connected client number in case of exception, decrement the number of active clients
-        increment = False
+        """
+        Handle the client connection. 
+        Assign the client to a WhisperServer instance.
+        and send the port number to the client.
+        """
+        assigned_port = None
         try:
-            #NOTE: refused too many clients
-            if self.active_clients >= self.max_clients:
-                client_socket.sendall(b"too many clients")
-                self.logger.warning("Connection refused: too many clients.")
-                return
-
-            with self.lock:
-                self.active_clients += 1
-                self.logger.info(f"new active client: {self.active_clients}")
-
-            increment = True # Flag to indicate that num of active clients should be decremented in case of exception 
-            port = self.find_free_port() # Find a free port and start Whisper server
-            client_socket.sendall(b"ok")  # Indicate server allocation success
-
-            # Create a threading event to signal when the Whisper server is ready
-            ready_event = threading.Event()
-            logger = setup_logging(f"WhisperServer_{port}")
-            whisper = WhisperServer("localhost", port, ready_event, logger)
-
-            whisper_thread = threading.Thread(target=whisper.start, daemon=True)
-            whisper_thread.start()  
-
-            # Wait until the Whisper server signals readiness 30 sec 
-            ready_event.wait(timeout=30)
-            if ready_event.is_set():
-                client_socket.sendall(f"{port}".encode("utf-8"))  # Send port to client
-                whisper_thread.join()  # Wait for Whisper server to finish           
+            if self.lock.acquire(timeout=5):
+                try:
+                    for server in self.servers:
+                        if server.is_available:
+                            assigned_port = server.config.port
+                            break
+                finally:
+                    self.lock.release()
+            
+            if assigned_port is not None:
+                self.logger.info(f"Assigning client to WhisperServer on port {assigned_port}")
+                client_socket.sendall(f"{assigned_port}".encode("utf-8"))
             else:
-                client_socket.sendall(b"server not ready")
+                self.logger.error("No available Whisper Servers found.")
+                client_socket.sendall(b"no server available")
 
         except Exception as e:
-            self.logger.error(f"Error handling client: {e}")
+            self.logger.error(f"Error handilng client: {e}")
             client_socket.sendall(b"internal server error")
-
         finally:
             client_socket.close()
-            if increment: 
-                #NOTE: This function is called in a separate thread for each client to reduce code duplication
-                client_socket.close()
-                with self.lock:
-                    self.logger.info("A whisper instance just closed.")
-                    self.active_clients -= 1
-                    self.logger.info(f"current active clients: {self.active_clients}")
-
 
     def start(self):
         logger.info("Starting LayerServer...")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             try:
-                server_socket.bind((self.host, self.port))  
-                server_socket.listen(5)
-                self.logger.info(f"LayerServer listening on {self.host}:{self.port}")
-                
-                while True:
-                    client_socket, addr = server_socket.accept()
-                    self.logger.info(f"Connection from {addr}")
-                    threading.Thread(target=self.handle_client, args=(client_socket,), daemon=True).start()
+                server_socket.bind((self.host, self.port)) 
+                #TODO: manage DDOS change max clients
+                server_socket.listen(2) # NOTE: listen for 2 clients at a time
+                self.logger.info(f"LayerServer listening on {self.host}:{self.port}") 
+                self.create_servers() #NOTE: pre-create the WhisperServer instances
+
+                while True: 
+                    try:
+                        client_socket, addr = server_socket.accept()
+                        self.logger.info(f"Connection from {addr}")
+                        threading.Thread(target=self.handle_client, args=(client_socket,), daemon=True).start() 
+                    except (ConnectionAbortedError, ConnectionResetError) as e:
+                        self.logger.error(f"Connection error with new client: {e}")
             except Exception as e:
-                self.logger.error(f"Error: {e}")
+                self.logger.error(f"Error druing layer server initalization: {e}")
             except KeyboardInterrupt:
+                server_socket.close()
                 self.logger.info("Stopping LayerServer...")
 
+#NOTE: MAIN FUNCTION WHEN THE SCRIPT IS RUN
+
 if __name__ == "__main__":
-    layer_server = LayerServer(host="0.0.0.0", port=8000, max_clients=2)
+    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=2, port_pool=range(8001, 8100))
     layer_server.start()
 
 

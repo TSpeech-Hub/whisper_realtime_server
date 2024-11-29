@@ -50,11 +50,11 @@ import soundfile
 # next client should be served by a new instance of this object
 class ServerProcessor:
 
-    def __init__(self, c, online_asr_proc, min_chunk, clogger):
+    def __init__(self, c, online_asr_proc, min_chunk, logger):
         self.connection = c
         self.online_asr_proc = online_asr_proc
         self.min_chunk = min_chunk
-        self.logger = clogger
+        self.logger = logger
         self.last_end = None
 
         self.is_first = True
@@ -99,10 +99,9 @@ class ServerProcessor:
                 beg = max(beg, self.last_end)
 
             self.last_end = end
-            # print("%1.0f %1.0f %s" % (beg,end,o[2]),flush=True,file=sys.stderr) 
-            self.logger.debug("%1.0f %1.0f %s" % (beg,end,o[2]))
+            # print("%1.0f %1.0f %s" % (beg,end,o[2]),flush=True,file=sys.stderr)
             return "%1.0f %1.0f %s" % (beg,end,o[2])
-        else: 
+        else:
             self.logger.debug("No text in this segment")
             return None
 

@@ -34,18 +34,12 @@ class TranscriptorClient:
                 s.connect((host, port))
                 print(f"Connected to main server at {host}:{port}")
                 
-                status = s.recv(1024).decode('utf-8').strip()
-                if status == "ok":
-                    print("Server allocating resources...")
-                    # Wait for the Whisper server port
-                    whisper_port = s.recv(1024).decode('utf-8').strip()
-                    if whisper_port.isdigit():
-                        print(f"Whisper server ready on port: {whisper_port}")
-                        return int(whisper_port)
-                    else:
-                        print(f"Error: {whisper_port}")
+                whisper_port = s.recv(1024).decode('utf-8').strip()
+                if whisper_port.isdigit():
+                    print(f"Whisper server ready on port: {whisper_port}")
+                    return int(whisper_port)
                 else:
-                    print(f"Server response: {status}")
+                    print(f"Error: {whisper_port}")
         except Exception as e:
             print(f"Error connecting to server: {e}")
 
@@ -66,9 +60,7 @@ class TranscriptorClient:
         """Receive transcriptions from the server."""
         try:
             while True:
-                response = sock.recv(1024).decode('utf-8').strip().split(' ', 2)
-                self.mean_time += abs (float(response[1]) - float(response[0]))
-                self.n_responses += 1
+                response = sock.recv(1024).decode('utf-8')
 
                 if response:
                     print(f"{response}")
@@ -93,7 +85,7 @@ class TranscriptorClient:
                     while sender_thread.is_alive() and receiver_thread.is_alive(): 
                         threading.Event().wait(0.1)
         except KeyboardInterrupt : 
-            print(f"mean time to respond {self.mean_time / self.n_responses}")
+            TranscriptorClient.__log("Stopping client...")
         except Exception as e:
             TranscriptorClient.__error(f"Error {e}")
 
