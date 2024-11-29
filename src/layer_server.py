@@ -12,7 +12,7 @@ from datetime import datetime
 The functionality of both dictionaries and defaultdict is almost the same except for the fact that defaultdict never raises a KeyError. 
 It provides a default value for the key that does not exist.
 """
-from collections import defaultdict
+
 
 #NOTE: LOGGING SETUP FUNCTION
 
@@ -53,6 +53,7 @@ class WhisperServer:
         config_dict["host"] = host 
         self.is_available = True
         self.logger = setup_logging(f"WhisperServer-{port}")
+        self.client_ip = None
         try:
             self.config = Namespace(**config_dict)  # This converts dictionary to Namespace 
             self.asr, self.online = asr_factory(self.config)
@@ -97,8 +98,15 @@ class WhisperServer:
                 while True:
                     try:
                         conn, addr = s.accept()
+                        #TODO: ban ip for DOS
+                        if addr[0] != self.client_ip:
+                            self.logger.error(f"Connection from unknown client {addr}")
+                            conn.sendall(b"denied")
+                            conn.close()
+                            continue
                         self.is_available = False
                         self.logger.info(f'Connected to client on {addr}')
+                        #NOTE: original code from whisper_online_server.py
                         connection = Connection(conn)
                         proc = ServerProcessor(connection, self.online, self.config.min_chunk_size, self.logger)
                         proc.process()
@@ -165,6 +173,8 @@ class LayerServer:
                     for server in self.servers:
                         if server.is_available:
                             assigned_port = server.config.port
+                            #TODO: ip ban for DOS
+                            server.client_ip = client_socket.getpeername()[0]
                             break
                 finally:
                     self.lock.release()
@@ -182,7 +192,9 @@ class LayerServer:
         finally:
             client_socket.close()
 
+    #WARNING: blocking function. server loop
     def start(self):
+        """Start the LayerServer and listen for incoming connections."""
         logger.info("Starting LayerServer...")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             try:
@@ -200,10 +212,12 @@ class LayerServer:
                     except (ConnectionAbortedError, ConnectionResetError) as e:
                         self.logger.error(f"Connection error with new client: {e}")
             except Exception as e:
-                self.logger.error(f"Error druing layer server initalization: {e}")
+                self.logger.error(f"Error during layer server initalization: {e}")
+                raise type(e)(f"Error during layer server initalization: {e}")
             except KeyboardInterrupt:
                 server_socket.close()
                 self.logger.info("Stopping LayerServer...")
+                raise KeyboardInterrupt("LayerServer stopped by user.")
 
 #NOTE: MAIN FUNCTION WHEN THE SCRIPT IS RUN
 

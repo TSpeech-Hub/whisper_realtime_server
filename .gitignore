@@ -10,6 +10,9 @@ resources/*
 # C extensions
 *.so
 
+#ssl files
+*.pem
+
 # Distribution / packaging
 .Python
 build/
