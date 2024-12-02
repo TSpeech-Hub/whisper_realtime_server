@@ -7,6 +7,10 @@ go check their reposioy for isntallation and documentation: https://github.com/u
 ## Installation TODO
 ### Whisper Server Config file json tutorial
 
+### Nvidia developer Kit 
+
+https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+
 ## Documentation TODO 
 A realtime server for speech to text given audio streaming
 

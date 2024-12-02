@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import logging, os, threading, socket
-from typing import override
 from OpenSSL import SSL
 from whisper_online import *
 from whisper_online_server import * 
@@ -67,7 +66,6 @@ class WhisperServer(Server):
     __CONFIG_FILE = "config.json"
 
     #NOTE: may be changed in future every subclass
-    @override
     def _setup_ssl_context(self):
         return super()._setup_ssl_context()
 
@@ -184,7 +182,6 @@ class WhisperServer(Server):
 class LayerServer(Server):
 
     #NOTE: may be changed in future every subclass
-    @override
     def _setup_ssl_context(self):
         return super()._setup_ssl_context()
 
