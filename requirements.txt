@@ -1,0 +1,6 @@
+numpy
+librosa
+soundfile
+faster-whisper
+pyopenssl
+
