@@ -84,14 +84,27 @@ class TranscriptorClient:
 
     def __receive_transcriptions(self, sock):
         """Receive transcriptions from the server."""
+        
+        count, sum = 0, 0
         try:
             while True:
                 response = sock.recv(1024).decode('utf-8')
+                slitted = response.split(" ")
+                timestamp = int(slitted[1]) - int(slitted[0])
+                sum += timestamp
+                count += 1
+                print(f"Received in {timestamp} milliseconds")
 
                 if response:
+                    print(f"Mean time to receive: {sum/count} milliseconds")
                     print(f"{response}")
         except Exception as e:
             TranscriptorClient.__error(f"Error in receiving transcription: {e}")
+        finally:
+            if count == 0:
+                TranscriptorClient.__error("No transcriptions received")
+            else:
+                TranscriptorClient.__error(f"Average time: {sum/count} milliseconds")
 
     def start(self, port):
         """Initialize the microphone stream and handle client-server communication."""

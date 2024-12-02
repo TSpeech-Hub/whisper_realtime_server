@@ -1,59 +1,64 @@
-# whisper_realtime_server TODO 
+# whisper_realtime_server TODO
+
+**Most of the information in this README is still a work in progress, just reminders for the future of the project**
+
 ## Whisper Streaming Credits
-This project uses whisper streaming
-Credits to [Dominik Macháček](https://ufal.mff.cuni.cz/dominik-machacek), [Raj Dabre](https://prajdabre.github.io/), [Ondřej Bojar](https://ufal.mff.cuni.cz/ondrej-bojar), 2023
-go check their reposioy for isntallation and documentation: https://github.com/ufal/whisper_streaming
+This project uses Whisper Streaming.  
+Credits to [Dominik Macháček](https://ufal.mff.cuni.cz/dominik-machacek), [Raj Dabre](https://prajdabre.github.io/), [Ondřej Bojar](https://ufal.mff.cuni.cz/ondrej-bojar), 2023.  
+Check their repository for installation and documentation: https://github.com/ufal/whisper_streaming
 
 ## Installation TODO
-### Whisper Server Config file json tutorial
+### Important: Before building Docker, create certificates for the server.
 
-### Nvidia developer Kit 
+### Whisper Server Config File JSON Tutorial
+
+### Nvidia Developer Kit 
 
 https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
 
-## Documentation TODO 
-A realtime server for speech to text given audio streaming
+## Documentation TODO
+A real-time server for speech-to-text from audio streaming.
 
-## Simulations tutorial
+## Simulations Tutorial
 
-after installing everything needed (we installed fastwe-whisper and all needed to run it) use the following command to run the simulation: 
+After installing everything needed (we installed faster-whisper and all dependencies to run it), use the following command to run the simulation:
 
-```
+```bash
 python3 whisper_online.py resources/sample1.wav --model tiny --backend faster-whisper  --language en --min-chunk-size 1 > out.txt
 ```
 
-We running tiny model using faster-whisper. 
-Lot of unreadable logs will popup in the terminal that executed the command above. If you want to see everything in a much clearer way open a new terminal and execute .
+Here, we are running the tiny model using faster-whisper.  
+A lot of unreadable logs will pop up in the terminal where the command is executed. If you want to see everything in a much clearer way, open a new terminal and execute:
 
-```
+```bash
 tail -f out.txt
 ```
 
-This will show the out.txt changing in real time in the terminal.
+This will show the content of `out.txt` changing in real-time in the terminal.
 
-This code open a server on localhost port 12000 listening from a client mic and returning speech to text.  
+This code opens a server on localhost, port 12000, listening from a client microphone and returning speech-to-text:
+```bash
+python3 whisper_online_server.py --warmup-file resources/sample1.wav --host localhost --port 12000 --model large-v3-turbo --backend faster-whisper --language en --min-chunk-size 1
 ```
-python3 whisper_online_server.py --warmup-file resources/sample1.wav --host localhost --port 12000 --model large-v3-turbo --backend faster-whisper  --language en --min-chunk-size 1
-```
 
-run client_test.py with the correct host as localhost and port (in this case 12000) set 
+Run `client_test.py` with the correct host set to `localhost` and port (in this case 12000).
 
-## OpenSSL: 
+## OpenSSL:
 ---
 
-### **Cos'è OpenSSL?**
-- È una libreria open-source utilizzata per implementare protocolli SSL e TLS.
-- Fornisce strumenti da riga di comando per creare certificati, chiavi e per testare la sicurezza delle connessioni.
+### **What is OpenSSL?**
+- OpenSSL is an open-source library used to implement SSL and TLS protocols.
+- It provides command-line tools to create certificates, keys, and test connection security.
 
 ---
 
-### **1. Installare OpenSSL**
-Per prima cosa, verifica se OpenSSL è già installato sul tuo sistema:
+### **1. Install OpenSSL**
+First, check if OpenSSL is already installed on your system:
 ```bash
 openssl version
 ```
 
-- Se non è installato, puoi farlo:
+- If it is not installed, you can do so:
   - **Fedora**:
     ```bash
     sudo dnf install openssl
@@ -61,88 +66,88 @@ openssl version
 
 ---
 
-### **2. Generare una Chiave Privata**
-La chiave privata è necessaria per identificare univocamente il tuo server.
+### **2. Generate a Private Key**
+A private key is required to uniquely identify your server.
 
 ```bash
 openssl genrsa -out key.pem 2048
 ```
 
-- `key.pem`: File che contiene la chiave privata.
-- `2048`: Lunghezza della chiave in bit (2048 è uno standard sicuro).
+- `key.pem`: File containing the private key.
+- `2048`: Length of the key in bits (2048 is a secure standard).
 
-Puoi visualizzare la chiave generata con:
+You can view the generated key with:
 ```bash
 cat key.pem
 ```
 
 ---
 
-### **3. Creare un Certificato Auto-Firmato**
-Per usare HTTPS, hai bisogno di un certificato. Per test locali, puoi creare un certificato auto-firmato (self-signed):
+### **3. Create a Self-Signed Certificate**
+To use HTTPS, you need a certificate. For local tests, you can create a self-signed certificate:
 
 ```bash
 openssl req -new -x509 -key key.pem -out cert.pem -days 365
 ```
 
-Durante l’esecuzione del comando, ti verranno chieste alcune informazioni:
-- **Country Name (2 letter code):** Codice del paese (es. `IT`).
-- **State or Province Name:** Nome dello stato o provincia.
-- **Locality Name:** Nome della città.
-- **Organization Name:** Nome dell’organizzazione.
-- **Common Name:** Inserisci `localhost` per test locali.
+During execution, you will be asked for some information:
+- **Country Name (2 letter code):** Country code (e.g., `US`).
+- **State or Province Name:** Name of the state or province.
+- **Locality Name:** Name of the city.
+- **Organization Name:** Name of the organization.
+- **Common Name:** Enter `localhost` for local testing.
 
-Il file `cert.pem` è il certificato auto-firmato. Puoi visualizzarlo con:
+The file `cert.pem` is the self-signed certificate. You can view it with:
 ```bash
 cat cert.pem
 ```
 
 ---
 
-### **4. Verificare il Certificato**
-Per controllare il certificato generato:
+### **4. Verify the Certificate**
+To check the generated certificate:
 ```bash
 openssl x509 -in cert.pem -text -noout
 ```
 
 ---
 
-### **5. Testare una Connessione HTTPS**
-OpenSSL può essere usato per testare connessioni HTTPS.
+### **5. Test an HTTPS Connection**
+OpenSSL can be used to test HTTPS connections.
 
-#### **5.1 Avviare un Server SSL**
-Esegui il server con il tuo certificato e chiave:
+#### **5.1 Start an SSL Server**
+Run the server with your certificate and key:
 ```bash
 openssl s_server -accept 8000 -cert cert.pem -key key.pem
 ```
 
-#### **5.2 Collegarsi al Server**
-Usa OpenSSL per connetterti al server:
+#### **5.2 Connect to the Server**
+Use OpenSSL to connect to the server:
 ```bash
 openssl s_client -connect localhost:8000
 ```
 
-Se tutto funziona, vedrai un output con il certificato e altre informazioni di connessione.
+If everything works, you will see an output with the certificate and other connection details.
 
 ---
 
-### **6. Creare una Certificate Signing Request (CSR)**
-Se vuoi ottenere un certificato firmato da una CA (Certificate Authority), devi generare una CSR:
+### **6. Create a Certificate Signing Request (CSR)**
+To obtain a certificate signed by a Certificate Authority (CA), you need to generate a CSR:
 
 ```bash
 openssl req -new -key key.pem -out request.csr
 ```
 
-Questo comando genera un file `request.csr` che deve essere inviato alla CA per ottenere un certificato firmato.
+This command generates a file `request.csr`, which should be sent to the CA to obtain a signed certificate.
 
 ---
 
-### **7. Visualizzare i File Generati**
-- **Chiave privata (`key.pem`):**
+### **7. View the Generated Files**
+- **Private key (`key.pem`):**
   ```bash
   openssl rsa -in key.pem -text -noout
   ```
-- **Certificato (`cert.pem`):**
+- **Certificate (`cert.pem`):**
   ```bash
   openssl x509 -in cert.pem -text -noout
   ```
@@ -153,77 +158,76 @@ Questo comando genera un file `request.csr` che deve essere inviato alla CA per 
 
 ---
 
-### **8. Simulare HTTPS con OpenSSL**
-Puoi simulare un server HTTPS con OpenSSL e testare con il browser o con strumenti come `curl`.
+### **8. Simulate HTTPS with OpenSSL**
+You can simulate an HTTPS server with OpenSSL and test it with a browser or tools like `curl`.
 
-1. **Avvia il Server:**
+1. **Start the Server:**
    ```bash
    openssl s_server -accept 4433 -cert cert.pem -key key.pem
    ```
 
-2. **Collegati al Server:**
-   Con il browser, vai su:
+2. **Connect to the Server:**
+   With a browser, go to:
    ```
    https://localhost:4433
    ```
 
-   Oppure usa `curl`:
+   Or use `curl`:
    ```bash
    curl -k https://localhost:4433
    ```
 
-   - Il flag `-k` dice a `curl` di ignorare la validità del certificato (utile per i certificati auto-firmati).
+   - The `-k` flag tells `curl` to ignore certificate validity (useful for self-signed certificates).
 
 ---
 
-### **9. Creare Certificati CA**
-Se vuoi simulare una CA per firmare certificati:
+### **9. Create CA Certificates**
+If you want to simulate a CA to sign certificates:
 
-1. **Genera una Chiave CA:**
+1. **Generate a CA Key:**
    ```bash
    openssl genrsa -out ca-key.pem 2048
    ```
 
-2. **Crea un Certificato CA:**
+2. **Create a CA Certificate:**
    ```bash
    openssl req -new -x509 -key ca-key.pem -out ca-cert.pem -days 365
    ```
 
-3. **Firma un Certificato con la CA:**
-   - Usa un CSR generato in precedenza:
+3. **Sign a Certificate with the CA:**
+   - Use a previously generated CSR:
      ```bash
      openssl x509 -req -in request.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out signed-cert.pem -days 365
      ```
 
-   - Il file `signed-cert.pem` è il certificato firmato dalla tua CA.
+   - The file `signed-cert.pem` is the certificate signed by your CA.
 
 ---
 
-### **10. Checklist dei Comandi**
-| Azione                         | Comando                                                                                     |
-|--------------------------------|---------------------------------------------------------------------------------------------|
-| Generare chiave privata        | `openssl genrsa -out key.pem 2048`                                                          |
-| Creare certificato auto-firmato| `openssl req -new -x509 -key key.pem -out cert.pem -days 365`                               |
-| Generare una CSR               | `openssl req -new -key key.pem -out request.csr`                                           |
-| Visualizzare certificato        | `openssl x509 -in cert.pem -text -noout`                                                   |
-| Avviare server HTTPS           | `openssl s_server -accept 4433 -cert cert.pem -key key.pem`                                |
-| Connettersi al server          | `openssl s_client -connect localhost:4433`                                                |
+### **10. Command Checklist**
+| Action                          | Command                                                                                      |
+|---------------------------------|----------------------------------------------------------------------------------------------|
+| Generate a private key          | `openssl genrsa -out key.pem 2048`                                                           |
+| Create a self-signed certificate| `openssl req -new -x509 -key key.pem -out cert.pem -days 365`                                |
+| Generate a CSR                  | `openssl req -new -key key.pem -out request.csr`                                             |
+| View certificate                | `openssl x509 -in cert.pem -text -noout`                                                    |
+| Start an HTTPS server           | `openssl s_server -accept 4433 -cert cert.pem -key key.pem`                                 |
+| Connect to the server           | `openssl s_client -connect localhost:4433`                                                 |
 
 ---
 
-## DDOS Protection
+## DDOS Protection TODO
 
-Il modo migliore per limitare il **DDoS** nella tua applicazione è implementare un **rate-limiting** a livello di connessione e usare un **firewall**.
+**Rate-limiting** at the connection level and using a **firewall**.
 
 1. **Rate-Limiting**:
-   - Limita il numero di connessioni accettate da un singolo IP in un determinato periodo.
-   - Usa librerie come `python-iptables` o middleware esterni come **HAProxy** o **Cloudflare**.
+   - Limit the number of connections accepted from a single IP within a specific time frame.
+   - Use libraries like `python-iptables` or external middleware like **HAProxy** or **Cloudflare**.
 
 2. **Firewall (iptables)**:
-   - Blocca IP che superano un certo numero di richieste con regole di `iptables`:
+   - Block IPs that exceed a certain number of requests with `iptables` rules like:
      ```bash
      iptables -A INPUT -p tcp --dport 8000 -m connlimit --connlimit-above 10 -j DROP
      ```
 
-3. **Connessioni SSL con validazione**:
-   - Richiedi un certificato client valido per autorizzare solo connessioni legittime.
+3. **SSL Connections with Validation**: Ensure the SSL certificate and client validation work effectively.

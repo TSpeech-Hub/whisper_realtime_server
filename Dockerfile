@@ -1,5 +1,5 @@
 # Usa un'immagine base con Python e supporto per NVIDIA CUDA
-FROM nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04
 
 # Imposta l'area geografica per evitare richieste interattive
 ENV DEBIAN_FRONTEND=noninteractive
