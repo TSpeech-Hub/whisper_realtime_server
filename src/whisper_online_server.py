@@ -102,12 +102,12 @@ class ServerProcessor:
             # print("%1.0f %1.0f %s" % (beg,end,o[2]),flush=True,file=sys.stderr)
             return "%1.0f %1.0f %s" % (beg,end,o[2])
         else:
-            self.logger.debug("No text in this segment")
             return None
 
     def send_result(self, o):
         msg = self.format_output_transcript(o)
         if msg is not None:
+            self.logger.debug(msg)
             self.connection.send(msg)
 
     def process(self):
@@ -124,9 +124,7 @@ class ServerProcessor:
             except BrokenPipeError:
                 self.logger.info("broken pipe -- connection closed?")
                 break
-
-#        o = online.finish()  # this should be working
-#        self.send_result(o)
+        self.online_asr_proc.finish()
 
 # server loop
 if __name__ == "__main__":

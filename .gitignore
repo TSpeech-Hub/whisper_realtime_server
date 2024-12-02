@@ -12,6 +12,7 @@ resources/*
 
 #ssl files
 *.pem
+*.csr
 
 # Distribution / packaging
 .Python
