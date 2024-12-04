@@ -69,7 +69,7 @@ class WhisperServer(Server):
     def _setup_ssl_context(self):
         return super()._setup_ssl_context()
 
-    def __init__(self, port, host):    
+    def __init__(self, port, host, asr=None):    
         with open(self.__CONFIG_FILE) as file:
             config_dict = json.load(file)  
         # Add host and port to the config 
@@ -80,9 +80,15 @@ class WhisperServer(Server):
         self._client_ip = None
         self._is_available = True
         self.__ssl_context = self._setup_ssl_context()
+        self.__config = Namespace(**config_dict)  # This converts dictionary to Namespace 
         try:
-            self.__config = Namespace(**config_dict)  # This converts dictionary to Namespace 
-            self.__asr, self.__online = asr_factory(self.__config)
+            if asr is None:
+                self.__asr, self.__online = asr_factory(self.__config)
+            else: 
+                self.__asr = asr
+                #TODO: vac implementation, also tokeniser for sentence in disabled (None)
+                self.online = OnlineASRProcessor(asr, None,logfile=self._logger,buffer_trimming=(self.__config.buffer_trimming, self.__config.buffer_trimming_sec))
+
         except Exception as e:
             msg = f"Error during ASR initialization {e} check the config file config.json"
             self._logger.error(msg)
@@ -181,6 +187,16 @@ class WhisperServer(Server):
 #TODO: Fix The terminate called without an active exception and then abort core dump issue with delayed whisper servers crash
 class LayerServer(Server):
 
+    __CONFIG_FILE = "config.json"
+
+    def __asr(self):
+        with open(self.__CONFIG_FILE) as file:
+            config_dict = json.load(file)  
+        # Add host and port to the config 
+        lan = config_dict["lan"]
+        model = config_dict["model"]
+        model = MultiProcessingFasterWhisperASR(lan, model, workers=self._max_servers) 
+    
     #NOTE: may be changed in future every subclass
     def _setup_ssl_context(self):
         return super()._setup_ssl_context()
@@ -193,6 +209,7 @@ class LayerServer(Server):
         self.__servers = []
         self.__port_pool = port_pool
         self.__lock = threading.Lock()
+        self._multiprocessingASR = self.__asr()
 
     def __create_servers(self):
         """
@@ -201,7 +218,7 @@ class LayerServer(Server):
         """
         for _ in range(self._max_servers):
             free_port = self.find_free_port()
-            server = WhisperServer(free_port, self._host)
+            server = WhisperServer(free_port, self._host, self._multiprocessingASR)
             server.warmup() #NOTE: warmup the ASR
             threading.Thread(target=server.start_server_loop, daemon=True).start()
             self.__servers.append(server)
@@ -303,7 +320,7 @@ class LayerServer(Server):
 #NOTE: MAIN FUNCTION WHEN THE SCRIPT IS RUN
 
 if __name__ == "__main__":
-    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=2, port_pool=range(8001, 8100))
+    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=3, port_pool=range(8001, 8100))
     layer_server.start()
 
 

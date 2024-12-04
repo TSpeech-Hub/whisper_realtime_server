@@ -3,4 +3,5 @@ librosa
 soundfile
 faster-whisper
 pyopenssl
+torchaudio
 

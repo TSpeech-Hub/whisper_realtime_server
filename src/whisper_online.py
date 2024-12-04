@@ -12,7 +12,7 @@ import math
 
 logger = logging.getLogger(__name__)
 
-@lru_cache
+@lru_cache(10**6)
 def load_audio(fname):
     a, _ = librosa.load(fname, sr=16000, dtype=np.float32)
     return a
@@ -102,7 +102,7 @@ class FasterWhisperASR(ASRBase):
     """
 
     sep = ""
-
+    
     def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
         from faster_whisper import WhisperModel
 #        logging.getLogger("faster_whisper").setLevel(logger.level)
@@ -157,6 +157,29 @@ class FasterWhisperASR(ASRBase):
         self.transcribe_kargs["task"] = "translate"
 
 
+class MultiProcessingFasterWhisperASR(FasterWhisperASR):
+
+    def __init__(self, lan, modelsize=None, cache_dir=None, model_dir=None, logfile=sys.stderr, workers=10):
+        self.workers = workers 
+        super().__init__(lan, modelsize, cache_dir, model_dir, logfile=logfile)
+
+
+    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
+        from faster_whisper import WhisperModel
+#        logging.getLogger("faster_whisper").setLevel(logger.level)
+        if model_dir is not None:
+            logger.debug(f"Loading whisper model from model_dir {model_dir}. modelsize and cache_dir parameters are not used.")
+            model_size_or_path = model_dir
+        elif modelsize is not None:
+            model_size_or_path = modelsize
+        else:
+            raise ValueError("modelsize or model_dir parameter must be set")
+
+
+        # this worked fast and reliably on NVIDIA L40
+        model = WhisperModel(model_size_or_path, device="cuda", compute_type="float16", num_workers=self.workers, download_root=cache_dir)
+        return model
+
 class OpenaiApiASR(ASRBase):
     """Uses OpenAI's Whisper API for audio transcription."""
 
@@ -192,17 +215,17 @@ class OpenaiApiASR(ASRBase):
 
         o = []
         for word in segments.words:
-            start = word.get("start")
-            end = word.get("end")
+            start = word.start
+            end = word.end
             if any(s[0] <= start <= s[1] for s in no_speech_segments):
                 # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
                 continue
-            o.append((start, end, word.get("word")))
+            o.append((start, end, word.word))
         return o
 
 
     def segments_end_ts(self, res):
-        return [s["end"] for s in res.words]
+        return [s.end for s in res.words]
 
     def transcribe(self, audio_data, prompt=None, *args, **kwargs):
         # Write the audio data to a buffer
@@ -534,8 +557,8 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
             repo_or_dir='snakers4/silero-vad',
             model='silero_vad'
         )
-        from silero_vad import FixedVADIterator
-        self.vac = FixedVADIterator(model)  # we use all the default options: 500ms silence, etc.  
+        from silero_vad_iterator import FixedVADIterator
+        self.vac = FixedVADIterator(model)  # we use the default options there: 500ms silence, 100ms padding, etc.  
 
         self.logfile = self.online.logfile
         self.init()
@@ -561,24 +584,31 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
         self.audio_buffer = np.append(self.audio_buffer, audio)
 
         if res is not None:
-            frame = list(res.values())[0]
+            frame = list(res.values())[0]-self.buffer_offset
             if 'start' in res and 'end' not in res:
                 self.status = 'voice'
-                send_audio = self.audio_buffer[frame-self.buffer_offset:]
-                self.online.init(offset=frame/self.SAMPLING_RATE)
+                send_audio = self.audio_buffer[frame:]
+                self.online.init(offset=(frame+self.buffer_offset)/self.SAMPLING_RATE)
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
                 self.clear_buffer()
             elif 'end' in res and 'start' not in res:
                 self.status = 'nonvoice'
-                send_audio = self.audio_buffer[:frame-self.buffer_offset]
+                send_audio = self.audio_buffer[:frame]
                 self.online.insert_audio_chunk(send_audio)
                 self.current_online_chunk_buffer_size += len(send_audio)
                 self.is_currently_final = True
                 self.clear_buffer()
             else:
-                # It doesn't happen in the current code.
-                raise NotImplemented("both start and end of voice in one chunk!!!")
+                beg = res["start"]-self.buffer_offset
+                end = res["end"]-self.buffer_offset
+                self.status = 'nonvoice'
+                send_audio = self.audio_buffer[beg:end]
+                self.online.init(offset=(beg+self.buffer_offset)/self.SAMPLING_RATE)
+                self.online.insert_audio_chunk(send_audio)
+                self.current_online_chunk_buffer_size += len(send_audio)
+                self.is_currently_final = True
+                self.clear_buffer()
         else:
             if self.status == 'voice':
                 self.online.insert_audio_chunk(self.audio_buffer)
@@ -599,7 +629,7 @@ class VACOnlineASRProcessor(OnlineASRProcessor):
             ret = self.online.process_iter()
             return ret
         else:
-            print("no online update, only VAD", self.status, file=self.logfile)
+            # print("no online update, only VAD", self.status, file=self.logfile)
             return (None, None, "")
 
     def finish(self):
