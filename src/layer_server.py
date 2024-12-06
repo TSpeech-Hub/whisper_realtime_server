@@ -189,13 +189,19 @@ class LayerServer(Server):
 
     __CONFIG_FILE = "config.json"
 
-    def __asr(self):
-        with open(self.__CONFIG_FILE) as file:
+    #TODO: load balancing between model instances
+
+    @staticmethod
+    def create_asr(processors):
+        with open(LayerServer.__CONFIG_FILE) as file:
             config_dict = json.load(file)  
         # Add host and port to the config 
         lan = config_dict["lan"]
         model = config_dict["model"]
-        model = MultiProcessingFasterWhisperASR(lan, model, workers=self._max_servers) 
+        #model = MultiProcessingFasterWhisperASR(lan, model, workers=3) 
+        model = MultiProcessingFasterWhisperASR(lan, model, workers=processors) 
+
+
     
     #NOTE: may be changed in future every subclass
     def _setup_ssl_context(self):
@@ -209,16 +215,22 @@ class LayerServer(Server):
         self.__servers = []
         self.__port_pool = port_pool
         self.__lock = threading.Lock()
-        self._multiprocessingASR = self.__asr()
 
     def __create_servers(self):
         """
         create all the WhisperServer instances
         and start them in separate threads.
         """
-        for _ in range(self._max_servers):
+
+        #TODO: manage asr instance control      
+        asr = LayerServer.create_asr(self._max_servers)
+        for i in range(self._max_servers):
+            """
+            if i % 3 == 0: 
+                asr = LayerServer.create_asr()
+            """
             free_port = self.find_free_port()
-            server = WhisperServer(free_port, self._host, self._multiprocessingASR)
+            server = WhisperServer(free_port, self._host, asr)
             server.warmup() #NOTE: warmup the ASR
             threading.Thread(target=server.start_server_loop, daemon=True).start()
             self.__servers.append(server)
@@ -320,7 +332,7 @@ class LayerServer(Server):
 #NOTE: MAIN FUNCTION WHEN THE SCRIPT IS RUN
 
 if __name__ == "__main__":
-    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=3, port_pool=range(8001, 8100))
+    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=12, port_pool=range(8001, 8100))
     layer_server.start()
 
 

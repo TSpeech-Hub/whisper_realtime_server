@@ -1,5 +1,5 @@
 # Usa un'immagine base con Python e supporto per NVIDIA CUDA
-FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 # Imposta l'area geografica per evitare richieste interattive
 ENV DEBIAN_FRONTEND=noninteractive
@@ -34,7 +34,7 @@ COPY src/cert.pem src/key.pem /app/src/
 # Copia i requisiti Python e installali
 COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
-RUN pip istall -U openai-whisper
+RUN pip install -U openai-whisper
 RUN pip install git+https://github.com/linto-ai/whisper-timestamped 
 
 # Copia il codice dell'applicazione nella cartella src
