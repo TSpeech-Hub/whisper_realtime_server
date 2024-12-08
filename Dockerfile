@@ -40,5 +40,7 @@ RUN pip install git+https://github.com/linto-ai/whisper-timestamped
 # Copia il codice dell'applicazione nella cartella src
 COPY src /app/src
 
+EXPOSE 8000 8001 8002
+
 # Comando di avvio del server
 CMD ["python3", "layer_server.py"]
