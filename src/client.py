@@ -26,7 +26,10 @@ def setup_ssl_context():
     return context
 
 class TranscriptorClient:
- 
+    def __init__(self):
+        self.__time_lock = threading.Lock()
+        self.timestamp = 0
+
     mean_time, n_responses = 0, 0
     @staticmethod 
     def __error(msg):
@@ -74,8 +77,13 @@ class TranscriptorClient:
         try:
             while True:
                 # Capture audio chunk
+                now = time.time()
                 audio_data = stream.read(AudioConfig.chunk_size)[0]
                 audio_chunk = (audio_data[:, 0] * 32768).astype(np.int16).tobytes()
+                with self.__time_lock:
+                    if self.timestamp == 0:
+                        self.timestamp = time.time() - now
+
                 
                 # Send audio chunk to server
                 sock.sendall(audio_chunk)
@@ -88,15 +96,18 @@ class TranscriptorClient:
         count, sum = 0, 0
         try:
             while True:
+                now = time.time()
                 response = sock.recv(1024).decode('utf-8')
-                slitted = response.split(" ")
-                timestamp = int(slitted[1]) - int(slitted[0])
-                sum += timestamp
-                count += 1
-                print(f"Received in {timestamp} milliseconds")
+                splitted = response.split(" ")
 
                 if response:
-                    print(f"Mean time to receive: {sum/count} milliseconds")
+                    with self.__time_lock:
+                        timestamp = round(time.time() - now, 2)
+                        self.timestamp = 0
+                    sum += timestamp
+                    count += 1
+                    #NOTE: staying silent for a while increase the time between chunks, this is just for debugging
+                    print(f"time since last audio chunk was sent: {timestamp} seconds")
                     print(f"{response}")
         except Exception as e:
             TranscriptorClient.__error(f"Error in receiving transcription: {e}")

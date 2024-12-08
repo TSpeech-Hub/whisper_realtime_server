@@ -3,6 +3,7 @@ import logging, os, threading, socket
 from OpenSSL import SSL
 from whisper_online import *
 from whisper_online_server import * 
+from parallel_whisper_online import MultiProcessingFasterWhisperASR
 from datetime import datetime
 from argparse import Namespace
 
@@ -86,7 +87,7 @@ class WhisperServer(Server):
                 self.__asr, self.__online = asr_factory(self.__config)
             else: 
                 self.__asr = asr
-                #TODO: vac implementation, also tokeniser for sentence in disabled (None)
+                #TODO: vac implementation, also tokeniser for sentence is disabled (None)
                 self.online = OnlineASRProcessor(asr, None,logfile=self._logger,buffer_trimming=(self.__config.buffer_trimming, self.__config.buffer_trimming_sec))
 
         except Exception as e:
@@ -332,7 +333,7 @@ class LayerServer(Server):
 #NOTE: MAIN FUNCTION WHEN THE SCRIPT IS RUN
 
 if __name__ == "__main__":
-    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=12, port_pool=range(8001, 8100))
+    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=2, port_pool=range(8001, 8100))
     layer_server.start()
 
 
