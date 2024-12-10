@@ -10,7 +10,7 @@
     "task": "transcribe",
     "vac": false,
     "vac_chunk_size": 0.04,
-    "vad": false,
+    "vad": true,
     "buffer_trimming": "segment",
     "buffer_trimming_sec": 15,
     "log_level": "DEBUG"

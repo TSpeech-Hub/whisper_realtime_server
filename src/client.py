@@ -103,7 +103,7 @@ class TranscriptorClient:
         finally: 
             s.close()
 
-    def simulate(self, filename, port): 
+    def simulate(self, filepath, port): 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         conn = SSL.Connection(setup_ssl_context(), s)
         try:
@@ -115,7 +115,7 @@ class TranscriptorClient:
             # Initialize microphone
                 # Connect to the server
                 
-            sender_thread = threading.Thread(target=self.__send_audio_simulation, args=(filename, conn), daemon=True)
+            sender_thread = threading.Thread(target=self.__send_audio_simulation, args=(filepath, conn), daemon=True)
             receiver_thread = threading.Thread(target=self.__receive_transcriptions, args=(conn,), daemon=True)
             
             sender_thread.start()
@@ -132,9 +132,9 @@ class TranscriptorClient:
             s.close()
 
 
-    def __send_audio_simulation(self, filename, sock):
+    def __send_audio_simulation(self, filepath, sock):
         try: 
-            audio_data, file_sample_rate = librosa.load(filename, sr=16000, mono=True)
+            audio_data, file_sample_rate = librosa.load(filepath, sr=16000, mono=True)
 
             num_samples = len(audio_data) 
 
@@ -203,18 +203,18 @@ class TranscriptorClient:
 
 
 args = argparse.ArgumentParser("optional file path for simulation")
-args.add_argument('--filename', type=Text,
+args.add_argument('--filepath', type=Text,
                     help='audio file path')
 
 if __name__ == "__main__":
     client = TranscriptorClient()
     port = client.connect_to_server(NetConfig.host, NetConfig.port)
 
-    filename = args.parse_args().filename
+    filepath = args.parse_args().filepath
 
-    if filename: 
+    if filepath: 
         print("DEBUG: simulation")
-        client.simulate(filename, port)
+        client.simulate(filepath, port)
     else: 
         print("DEBUG: real")
         client.start(port)

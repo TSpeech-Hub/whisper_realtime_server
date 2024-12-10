@@ -48,7 +48,6 @@ class Server():
 
     #NOTE: class variables
     modifiable = threading.Lock() 
-    __active_clients = 0
     
     def __init__(self, host, port, logger): 
         self._host = host
@@ -73,9 +72,6 @@ class WhisperServer(Server):
     def __init__(self, port, host, asr=None):    
         with open(self.__CONFIG_FILE) as file:
             config_dict = json.load(file)  
-        # Add host and port to the config 
-        config_dict["port"] = port
-        config_dict["host"] = host 
 
         super().__init__(host, port, setup_logging(f"WhisperServer-{port}"))
         self._client_ip = None
@@ -83,12 +79,12 @@ class WhisperServer(Server):
         self.__ssl_context = self._setup_ssl_context()
         self.__config = Namespace(**config_dict)  # This converts dictionary to Namespace 
         try:
-            if asr is None:
-                self.__asr, self.__online = asr_factory(self.__config)
-            else: 
-                self.__asr = asr
-                #TODO: vac implementation, also tokeniser for sentence is disabled (None)
-                self.online = OnlineASRProcessor(asr, None,logfile=self._logger,buffer_trimming=(self.__config.buffer_trimming, self.__config.buffer_trimming_sec))
+            if asr == None: 
+                asr = MultiProcessingFasterWhisperASR(self.__config.language, self.__config.model, workers=1) 
+                asr.warmup(self.__config.warmup_file)
+
+            #TODO: vac implementation, also tokeniser for sentence is disabled (None)
+            self.__online = OnlineASRProcessor(asr, None,logfile=self._logger,buffer_trimming=(self.__config.buffer_trimming, self.__config.buffer_trimming_sec))
 
         except Exception as e:
             msg = f"Error during ASR initialization {e} check the config file config.json"
@@ -112,29 +108,7 @@ class WhisperServer(Server):
     @client_ip.setter
     def client_ip(self, ip):
         with Server.modifiable: self._client_ip = ip
-
-    def warmup(self): 
-        """
-        original repo warmup code,
-        warm up the ASR because the very first transcribe takes more time than the others. 
-        Test results in https://github.com/ufal/whisper_streaming/pull/81
-        """
-        msg = "Whisper is not warmed up. The first chunk processing may take longer."
-        if self.__config.warmup_file:
-            if os.path.isfile(self.__config.warmup_file):
-                a = load_audio_chunk(self.__config.warmup_file,0,1)
-                try:
-                    self.__asr.transcribe(a)
-                except Exception as e:
-                    msg = f"Error during ASR initialization {e} check the config file config.json"
-                    self._logger.error(msg)
-                    raise type(e)(msg)
-                self._logger.info("Whisper is warmed up.")
-            else:
-                self._logger.critical("The warm up file is not available. "+msg)
-        else:
-            self._logger.warning(msg)
-   
+ 
     #NOTE: helper function for start: socket creation and binding
     def __socket(self):
         try: 
@@ -192,17 +166,9 @@ class LayerServer(Server):
 
     #TODO: load balancing between model instances
 
-    @staticmethod
-    def create_asr(processors):
-        with open(LayerServer.__CONFIG_FILE) as file:
-            config_dict = json.load(file)  
-        # Add host and port to the config 
-        lan = config_dict["lan"]
-        model = config_dict["model"]
-        #model = MultiProcessingFasterWhisperASR(lan, model, workers=3) 
-        model = MultiProcessingFasterWhisperASR(lan, model, workers=processors) 
-
-
+    def create_asr(self, processors = 1) :
+        model = MultiProcessingFasterWhisperASR(self._whisper_config.language, self._whisper_config.model, workers=processors) 
+        return model
     
     #NOTE: may be changed in future every subclass
     def _setup_ssl_context(self):
@@ -216,6 +182,10 @@ class LayerServer(Server):
         self.__servers = []
         self.__port_pool = port_pool
         self.__lock = threading.Lock()
+        with open(LayerServer.__CONFIG_FILE) as file:
+            config_dict = json.load(file)  
+        # Add host and port to the config 
+        self._whisper_config = Namespace(**config_dict)
 
     def __create_servers(self):
         """
@@ -224,15 +194,13 @@ class LayerServer(Server):
         """
 
         #TODO: manage asr instance control      
-        asr = LayerServer.create_asr(self._max_servers)
         for i in range(self._max_servers):
-            """
-            if i % 3 == 0: 
-                asr = LayerServer.create_asr()
-            """
+            if i % 5 == 0: 
+                asr = self.create_asr(processors=5)
+                asr.warmup(self._whisper_config.warmup_file) 
+                self._logger.info("created and warmed up new asr")
             free_port = self.find_free_port()
             server = WhisperServer(free_port, self._host, asr)
-            server.warmup() #NOTE: warmup the ASR
             threading.Thread(target=server.start_server_loop, daemon=True).start()
             self.__servers.append(server)
             self._logger.info(f"WhisperServer started on port {free_port}")
@@ -333,7 +301,7 @@ class LayerServer(Server):
 #NOTE: MAIN FUNCTION WHEN THE SCRIPT IS RUN
 
 if __name__ == "__main__":
-    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=2, port_pool=range(8001, 8100))
+    layer_server = LayerServer(host="0.0.0.0", port=8000, max_servers=20, port_pool=range(8001, 8100))
     layer_server.start()
 
 
