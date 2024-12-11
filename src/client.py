@@ -142,13 +142,10 @@ class TranscriptorClient:
                 end = start + 16000
                 chunk = audio_data[start:end]
 
-                # Scala e converti il chunk in int16
                 audio_chunk = (chunk * 32768).astype(np.int16).tobytes()
 
-                # Invia il chunk tramite la socket
                 sock.sendall(audio_chunk)
 
-                # Aspetta 1 secondo per simulare l'invio in tempo reale
                 time.sleep(1)        
         except Exception as e:
             TranscriptorClient.__error(f"Error in sending audio: {e}")
