@@ -144,7 +144,6 @@ Before setting up your own client, it's important to understand the server archi
 
 - This project uses parts of the Whisper Streaming project. Other projects involved in whisper streaming are credited in their repo, check it out: [whisper streaming](https://github.com/ufal/whisper_streaming)
 - Credits also to: [faster whisper](https://github.com/SYSTRAN/faster-whisper)
-Ecco una versione aggiornata con il riferimento allo stato embrionale del progetto e l'invito a contribuire:
 
 ## Contributing
 
