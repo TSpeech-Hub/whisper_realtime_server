@@ -160,6 +160,7 @@ Thank you for helping improve this project and making it better for everyone!
 
 ## TODO
 - [ ] Custom enviroment setup
-- [ ] grpc implementation 
+- [ ] grpc implementation
+- [ ] remove unused packages in Dockerfile and requirements 
 
 
