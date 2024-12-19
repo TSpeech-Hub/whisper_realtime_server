@@ -15,7 +15,6 @@ The functionality of both dictionaries and defaultdict is almost the same except
 It provides a default value for the key that does not exist.
 """
 
-
 #NOTE: LOGGING SETUP FUNCTION
 
 def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
@@ -41,10 +40,11 @@ def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
 
     return logger
 
-
 #NOTE: CONNECTION CLASS DEFINITION
 
 class Server(): 
+
+    __CONFIG_FILE = "config.json"
 
     #NOTE: class variables
     modifiable = threading.Lock() 
@@ -53,6 +53,9 @@ class Server():
         self._host = host
         self._port = port
         self._logger = logger
+        with open(self.__CONFIG_FILE) as file:
+             wconfig = json.load(file)  
+        self._whisper_config = Namespace(**wconfig)
 
     def _setup_ssl_context(self):
         """Create an SSL context using pyOpenSSL."""
@@ -61,32 +64,24 @@ class Server():
         context.use_certificate_file("cert.pem")
         return context
 
-#TODO: rename to parallel whisper server, refactoring code , configuration
-class WhisperServer(Server):  
-    __CONFIG_FILE = "config.json"
+
+class WhisperServer(Server): #set for parallel use 
 
     #NOTE: may be changed in future every subclass
     def _setup_ssl_context(self):
         return super()._setup_ssl_context()
 
     def __init__(self, port, host, asr):    
-        with open(self.__CONFIG_FILE) as file:
-            config_dict = json.load(file)  
         super().__init__(host, port, setup_logging(f"WhisperServer-{port}"))
-
         try:
             self._client_ip = None
             self._is_available = True
             self.__ssl_context = self._setup_ssl_context()
-            self.__config = Namespace(**config_dict)  # This converts dictionary to Namespace 
-
-            #TODO: important : must use sentenct and tokenizer for parallel to work, you must know which language is our speaker speaking
-            self.__online = ParallelOnlineASRProcessor(asr, None, buffer_trimming=("segment", 15), logfile=self._logger)
-            self.__online.set_logger(self._logger)
+            # cant use tokenizer and always use segment trimming with 15 sec threshold 
+            self.__online = ParallelOnlineASRProcessor(asr, logger=self._logger)
         except Exception as e:
             msg = f"Error during ASR initialization {e} check the config file config.json"
             self._logger.error(msg)
-
 
     #NOTE: getters 
     @property 
@@ -121,8 +116,8 @@ class WhisperServer(Server):
             raise type(e)(f"Error during server binding: {e} check the config file config.json")
 
     #WARNING: blocking function. server loop
-    #NOTE: startup code from whisper_online_server.py original code repo
     def start_server_loop(self): 
+        """ startup code from whisper_online_server.py original code repo """
         s = self.__socket()
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # just for starting the server
         while True:
@@ -131,7 +126,6 @@ class WhisperServer(Server):
                 conn = SSL.Connection(self.__ssl_context ,conn)
                 conn.set_accept_state()
                 conn.do_handshake()
-                #TODO: ban ip for DOS
                 if addr[0] != self.client_ip:
                     self._logger.error(f"Connection from unknown client {addr}")
                     conn.sendall(b"denied")
@@ -143,7 +137,7 @@ class WhisperServer(Server):
 
                 #NOTE: original code from whisper_online_server.py
                 whisper_connection = Connection(conn)
-                proc = ParallelServerProcessor(whisper_connection, self.__online, self.__config.min_chunk_size, self._logger)
+                proc = ParallelServerProcessor(whisper_connection, self.__online, self._whisper_config.min_chunk_size, self._logger)
                 proc.parallel_process()
 
             except BrokenPipeError as e:
@@ -164,17 +158,7 @@ class WhisperServer(Server):
 #TODO: Fix The terminate called without an active exception and then abort core dump issue with delayed whisper servers crash
 class LayerServer(Server):
 
-    __CONFIG_FILE = "config.json"
-
-    #TODO: load balancing between model instances
-
-    def create_asr(self, processors = 1) :
-        model = MultiProcessingFasterWhisperASR(lan="auto", logger=setup_logging("asr"), modelsize=self._whisper_config.model, workers=processors) 
-        return model
-    
-    #NOTE: may be changed in future every subclass
-    def _setup_ssl_context(self):
-        return super()._setup_ssl_context()
+    #TODO: some more load balancing 
 
     def __init__(self, host="0.0.0.0", port=8000, max_servers=2, logger=setup_logging("LayerServer", use_stdout=True), port_pool=range(8001, 8100)):
         """Initialize the LayerServer with host, port, and max client limit."""
@@ -184,10 +168,14 @@ class LayerServer(Server):
         self.__servers = []
         self.__port_pool = port_pool
         self.__lock = threading.Lock()
-        with open(LayerServer.__CONFIG_FILE) as file:
-            config_dict = json.load(file)  
-        # Add host and port to the config 
-        self._whisper_config = Namespace(**config_dict)
+
+    def create_asr(self) :
+        model = MultiProcessingFasterWhisperASR(lan="auto", logger=setup_logging("asr"), modelsize=self._whisper_config.model) 
+        return model
+    
+    #NOTE: may be changed in future every subclass
+    def _setup_ssl_context(self):
+        return super()._setup_ssl_context()
 
     def __create_servers(self):
         """
@@ -195,8 +183,7 @@ class LayerServer(Server):
         and start them in separate threads.
         """
 
-        #TODO: manage asr instance control      
-        asr = self.create_asr()
+        asr = self.create_asr() #TODO: asr instance manager  
         asr.warmup("../resources/sample2.mp3")
         #TODO: the asr can crash find a way to understand if that happened
         threading.Thread(target=asr.realtime_parallel_asr_loop, daemon=True).start()
@@ -231,8 +218,7 @@ class LayerServer(Server):
         try:
             if self.__lock.acquire(timeout=5):
                 for server in self.__servers:
-                    #TODO: ip ban for DOS
-                    if server.available:
+                    if server.available: #TODO: ip ban for DOS
                         assigned_port = server.port
                         server.client_ip = connection.getpeername()[0]
                         break
