@@ -9,6 +9,7 @@ WORKDIR /app/src
 
 # Aggiorna i pacchetti, installa Rust e le dipendenze di base
 RUN apt-get update && apt-get install -y \
+    vim \
     python3 \
     python3-pip \
     git \
@@ -29,7 +30,7 @@ ENV PATH="/root/.cargo/bin:$PATH"
 
 # Copia i file di configurazione (certificati SSL) e la cartella resources nella directory appropriata
 COPY resources /app/resources
-COPY src/cert.pem src/key.pem /app/src/
+#COPY src/cert.pem src/key.pem /app/src/
 
 # Copia i requisiti Python e installali
 COPY requirements.txt /app/
