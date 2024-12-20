@@ -158,8 +158,10 @@ For major changes, please open an **issue** first to discuss what you'd like to 
 Thank you for helping improve this project and making it better for everyone!
 
 ## TODO
+- [x] Rapidfuzz token confirmation 
 - [ ] Custom enviroment setup
 - [ ] grpc implementation
 - [ ] remove unused packages in Dockerfile and requirements 
 
-
+## BUGFIX 
+- [ ] Rarely other client words can end in others buffer 

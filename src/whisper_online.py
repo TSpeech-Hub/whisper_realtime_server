@@ -242,12 +242,15 @@ class OpenaiApiASR(ASRBase):
     def set_translate_task(self):
         self.task = "translate"
 
+from rapidfuzz import fuzz 
+
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
         self.commited_in_buffer = []
         self.buffer = []
         self.new = []
+        self.fuzz_threshold = 92
 
         self.last_commited_time = 0
         self.last_commited_word = None
@@ -271,7 +274,7 @@ class HypothesisBuffer:
                     for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum 
                         c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
-                        if c == tail:
+                        if fuzz.partial_ratio(c, tail) >= self.fuzz_threshold:
                             words = []
                             for j in range(i):
                                 words.append(repr(self.new.pop(0)))

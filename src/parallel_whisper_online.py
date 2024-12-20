@@ -58,7 +58,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         super().__init__(lan, modelsize, cache_dir, model_dir, logfile=logfile)# cant use vad if segment times self.use_vad() 
 
     #also we use segment timing, if the segment time start is not zero it mean we have to normalize the words time by segment start 
-    def ts_words_nopunct(self, segments):
+    def ts_words_normalized(self, segments):
         # return: transcribe result object to [(beg,end,"word1"), ...]
         o = []
         for segment in segments:
@@ -67,10 +67,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                 if segment.no_speech_prob > 0.9:
                     continue
                 # not stripping the spaces -- should not be merged with them!
-                w = word.word
-                for c in [".", ",", ";", ":"]: # try to reduce mismatching for now 
-                    w = w.replace(c, "")
-                t = (word.start - segment_start, word.end - segment_start, w)
+                t = (word.start - segment_start, word.end - segment_start, word.word)
                 o.append(t)
         return o
 
@@ -195,7 +192,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         self._transcription_done.clear()
         res = self.asr.get_last_transcribed(id(self))
 
-        tsw = self.asr.ts_words_nopunct(res)
+        tsw = self.asr.ts_words_normalized(res)
 
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
         o = self.transcript_buffer.flush()
