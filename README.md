@@ -8,7 +8,8 @@
 
 #### Important: Before Building with Docker
 
-Before building the server with Docker, you need to create a private key and a certificate. This is required to enable HTTPS for secure communication. A key and certificate are required, even for testing purposes.
+Before building the server with Docker, you need to create a private key and a certificate. This is required to enable HTTPS for secure communication. A key and certificate are required, even for testing purposes. Cretate your own certificate for testing purposes inside the `src` folder in your cloned repository. Follow the instructions.
+(this part is here because I needed encryption during remote testing. will be made "automatic" in the future with a better client-server architecture)
 
 #### 1. Generate a Private Key
 
