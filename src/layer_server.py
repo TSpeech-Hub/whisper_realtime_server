@@ -6,6 +6,7 @@ from whisper_online_server import *
 from parallel_whisper_online import MultiProcessingFasterWhisperASR, ParallelOnlineASRProcessor, ParallelServerProcessor
 from datetime import datetime
 from argparse import Namespace
+from ctypes import c_bool
 
 import json  
 from argparse import Namespace
@@ -46,9 +47,6 @@ class Server():
 
     __CONFIG_FILE = "config.json"
 
-    #NOTE: class variables
-    modifiable = threading.Lock() 
-    
     def __init__(self, host, port, logger): 
         self._host = host
         self._port = port
@@ -75,7 +73,7 @@ class WhisperServer(Server): #set for parallel use
         super().__init__(host, port, setup_logging(f"WhisperServer-{port}"))
         try:
             self._client_ip = None
-            self._is_available = True
+            self._is_available = c_bool(True)
             self.__ssl_context = self._setup_ssl_context()
             # cant use tokenizer and always use segment trimming with 15 sec threshold 
             self.__online = ParallelOnlineASRProcessor(asr, logger=self._logger)
@@ -94,12 +92,16 @@ class WhisperServer(Server): #set for parallel use
 
     @property
     def available(self):
-        return self._is_available
+        return self._is_available.value
 
     #NOTE: setters  
     @client_ip.setter
     def client_ip(self, ip):
-        with Server.modifiable: self._client_ip = ip
+        self._client_ip = ip
+
+    @available.setter
+    def available(self, state):
+        self._is_available.value = state
  
     #NOTE: helper function for start: socket creation and binding
     def __socket(self):
@@ -132,7 +134,7 @@ class WhisperServer(Server): #set for parallel use
                     conn.close()
                     raise BrokenPipeError("Connection from unknown client") 
 
-                self._is_available = False
+                self._is_available.value = False #TODO: keep this here?
                 self._logger.info(f'Connected to client on {addr}')
 
                 #NOTE: original code from whisper_online_server.py
@@ -148,8 +150,8 @@ class WhisperServer(Server): #set for parallel use
                 self._logger.error(f"something went wrong: {e}")
                 raise e
             finally: 
-                self._is_available = True
                 self._logger.info(f'Connection to client closed')
+                self._is_available.value = True
                 conn.close()
                 
 
@@ -167,7 +169,7 @@ class LayerServer(Server):
         self.__context = self._setup_ssl_context()
         self.__servers = []
         self.__port_pool = port_pool
-        self.__lock = threading.Lock()
+        self.__edit_servers= threading.Lock()
 
     def create_asr(self) :
         model = MultiProcessingFasterWhisperASR(lan="auto", logger=setup_logging("asr"), modelsize=self._whisper_config.model) 
@@ -216,13 +218,14 @@ class LayerServer(Server):
         """
         assigned_port = None
         try:
-            if self.__lock.acquire(timeout=5):
+            if self.__edit_servers.acquire(timeout=10):
                 for server in self.__servers:
                     if server.available: #TODO: ip ban for DOS
+                        server.available = False
                         assigned_port = server.port
                         server.client_ip = connection.getpeername()[0]
                         break
-                self.__lock.release()
+                self.__edit_servers.release()
             
             if assigned_port is not None:
                 self._logger.info(f"Assigning client to WhisperServer on port {assigned_port}")

@@ -82,7 +82,7 @@ class TranscriptorClient:
             conn.connect((NetConfig.host, port))
             conn.set_connect_state()
             conn.do_handshake()
-            TranscriptorClient.__log(f"Connected to server at {NetConfig.host}:{NetConfig.port}")
+            TranscriptorClient.__log(f"Streaming to server at {NetConfig.host}:{port}")
             # Initialize microphone
             with sd.InputStream(callback=None, channels=1, samplerate=AudioConfig.sample_rate, blocksize=AudioConfig.chunk_size) as stream:
                 # Connect to the server
@@ -111,7 +111,7 @@ class TranscriptorClient:
             conn.connect((NetConfig.host, port))
             conn.set_connect_state()
             conn.do_handshake()
-            TranscriptorClient.__log(f"Connected to server at {NetConfig.host}:{NetConfig.port}")
+            TranscriptorClient.__log(f"Streaming to server at {NetConfig.host}:{port}")
             # Initialize microphone
                 # Connect to the server
                 
