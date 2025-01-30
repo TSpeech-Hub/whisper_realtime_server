@@ -8,8 +8,8 @@
 
 #### Important: Before Building with Docker
 
-Before building the server with Docker, you need to create a private key and a certificate. This is required to enable HTTPS for secure communication. A key and certificate are required, even for testing purposes. Cretate your own certificate for testing purposes inside the `src` folder in your cloned repository. Follow the instructions.
-(this part is here because I needed encryption during remote testing. will be made "automatic" in the future with a better client-server architecture)
+Before building the server with Docker, you need to create a private key and a certificate. This is required to enable HTTPS for secure communication. A key and certificate are required, even for testing purposes. This annoying part is here for early testing and will soon be removed.
+First Go in the `src` directory of the project and then follow the instructions below.
 
 #### 1. Generate a Private Key
 
@@ -164,5 +164,9 @@ Thank you for helping improve this project and making it better for everyone!
 - [ ] grpc implementation
 - [ ] remove unused packages in Dockerfile and requirements 
 
-## BUGFIX 
+## FIXED 
+- [x] Server fail to always return indipendent ports on concurrent requests now fixed
+
+## KNOWN BUGS - UNKNOWN CAUSE
 - [ ] Rarely other client words can end in others buffer 
+- [ ] `MultiProcessingFasterWhisperASR` and the `ParallelOnlineASRProcessor` instances can get stuck with high number of streaming active concurrently (10 to 20)
