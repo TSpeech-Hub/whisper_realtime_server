@@ -5,4 +5,5 @@ faster-whisper
 pyopenssl
 torchaudio
 rapidfuzz
+grpcio
 

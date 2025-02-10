@@ -1,0 +1,23 @@
+// speech.proto
+syntax = "proto3";
+
+package speech;
+
+option go_package = "example.com/speechpb;speechpb";
+
+// (float array) 
+message AudioChunk {
+  repeated float samples = 1;
+  // Puoi aggiungere ulteriori campi come timestamp, se necessario
+}
+
+// TODO: may add more metadata 
+message Transcript {
+  string text = 1;
+}
+
+// Bidir. streaming
+service SpeechToText {
+  rpc StreamingRecognize(stream AudioChunk) returns (stream Transcript);
+}
+

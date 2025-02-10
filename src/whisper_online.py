@@ -9,6 +9,7 @@ import logging
 import io
 import soundfile as sf
 import math
+from rapidfuzz import fuzz, utils
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +243,6 @@ class OpenaiApiASR(ASRBase):
     def set_translate_task(self):
         self.task = "translate"
 
-from rapidfuzz import fuzz 
 
 class HypothesisBuffer:
 
@@ -250,7 +250,7 @@ class HypothesisBuffer:
         self.commited_in_buffer = []
         self.buffer = []
         self.new = []
-        self.fuzz_threshold = 92
+        self.fuzz_threshold = 90
 
         self.last_commited_time = 0
         self.last_commited_word = None
@@ -274,7 +274,7 @@ class HypothesisBuffer:
                     for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum 
                         c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
-                        if fuzz.partial_ratio(c, tail) >= self.fuzz_threshold:
+                        if c == tail :
                             words = []
                             for j in range(i):
                                 words.append(repr(self.new.pop(0)))
@@ -291,8 +291,7 @@ class HypothesisBuffer:
 
             if len(self.buffer) == 0:
                 break
-
-            if nt == self.buffer[0][2]:
+            if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) > self.fuzz_threshold:
                 commit.append((na,nb,nt))
                 self.last_commited_word = nt
                 self.last_commited_time = nb
