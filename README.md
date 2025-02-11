@@ -4,54 +4,6 @@
 
 ## Installation
 
-### Docker Installation
-
-#### Important: Before Building with Docker
-
-Before building the server with Docker, you need to create a private key and a certificate. This is required to enable HTTPS for secure communication. A key and certificate are required, even for testing purposes. This annoying part is here for early testing and will soon be removed.
-First Go in the `src` directory of the project and then follow the instructions below.
-
-#### 1. Generate a Private Key
-
-Use the following command to generate a private key:
-
-```bash
-openssl genrsa -out key.pem 2048
-```
-
-- `key.pem`: File containing the private key.
-- `2048`: Length of the key in bits (2048 is a secure standard).
-
-View the generated key with:
-
-```bash
-cat key.pem
-```
-
-#### 2. Create a Self-Signed Certificate
-
-Generate a self-signed certificate using the private key (for testing purposes):
-
-```bash
-openssl req -new -x509 -key key.pem -out cert.pem -days 365
-```
-
-During execution, you will be asked to enter some information:
-
-- **Country Name (2 letter code):** e.g., `US`
-- **State or Province Name:** e.g., `California`
-- **Locality Name:** e.g., `San Francisco`
-- **Organization Name:** Your organization or project name
-- **Common Name:** Use `localhost` for local testing
-
-View the self-signed certificate with:
-
-```bash
-cat cert.pem
-```
-
-For production use, a valid certificate issued by a trusted Certificate Authority (CA) is required to ensure a secure connection. Certificate check is disabled on the client for testing.
-
 ### Building with Docker
 
 #### Prerequisites
@@ -64,6 +16,11 @@ Clone the repository:
 git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
 cd whisper_realtime_server
 ```
+
+#### Before builing using docker
+
+- When built, you will be able to test the server with your mic or a simulation of realtime audio streaming using audio files
+- there are already two audio examples in the resources folder, if you want to add new ones, then **BEFORE** the next steps, add the audio files to `whisper_realtime_server/resources`
 
 #### Steps to Build and Run the Docker Image
 
@@ -82,11 +39,11 @@ cd whisper_realtime_server
 3. Run the Docker container with GPU support and port mapping:
 
    ```bash
-   docker run --gpus all -p 8000-8050:8000-8050 --name whisper_server whisper_realtime_server
+   docker run --gpus all -p 50051:50051 --name whisper_server whisper_realtime_server
    ```
 
-   - You can change the port range `8000-8050` if needed.
-   - The server is now running and ready to accept connections. You can access it at port 8000 using the `client.py` script.
+   - You can change the port range `50051:50051` if needed. Remember to change port on `whisper_server.py` and `gprcclient.py`.
+   - The server is now running and ready to accept connections. You can access it at port `50051` using the `client.py` script.
 
 4. To stop the Docker container:
 
@@ -100,6 +57,45 @@ cd whisper_realtime_server
    docker start whisper_server
    ```
 
+### Running the test client
+
+if you want to run the client directly in the docker container follow these steps:
+
+1. Ensure the container in running:
+
+   ```bash
+   docker ps 
+   ```
+
+   if you see whisper_server listed then you are good to go, otherwise start the container 
+
+   ```bash
+   docker start whisper_server
+   ```
+
+2. Open a terminal in the container
+   
+   ```bash
+   docker exec -it whisper_server /bin/bash 
+   ```
+
+   now you should see something like:
+   
+   ```bash
+   root@<imageid>:/app/src# 
+   ```
+
+3. Run the grpc client
+
+   - Run the client using your system microphone 
+      ```bash
+      python3 grpcclient.py 
+      ```
+   - Run a realtime simulation using an audio file
+      ```bash
+      python3 grpcclient.py --simulate ../resources/sample1.wav 
+      ```
+
 ### Custom Environment
 
 #### TODO
@@ -108,18 +104,29 @@ cd whisper_realtime_server
 
 For now, avoid modifying the `config.json` file. If you need to experiment, it is advisable to only adjust the model size parameter.
 
+## Num Workers and Token Confirmation Threshold
+
+### TODO Tweaking tutorial and explanation
+
 ## Nvidia Developer Kit
 
 The Nvidia Developer Kit is required for GPU support. The server has been tested with CUDA 12.X and cuDNN 9, as specified in the Dockerfile. The Whisper Streaming project has been tested with CUDA 11.7 and cuDNN 8.5.0, so it is recommended to use at least CUDA 11.7 and cuDNN 8.5.0.&#x20;
 
 ## Documentation
 
-Before setting up your own client, it's important to understand the server architecture. The client first connects to a layer server on the default port (8000). After connecting, the layer server assigns a port number to the client. The client then connects to the same host on the assigned port, streams audio data to this port, and receives real-time transcriptions.&#x20;
+Before setting up your own client, it's important to understand the server architecture. The client first connects to a layer server on the default port (`50051`). After connecting, the layer server assigns a port number to the client. The client then connects to the same host on the assigned port, streams audio data to this port, and receives real-time transcriptions.&#x20;
 
-## Simulations Tutorial
+## Testing the server locally
+
+Install all dependencies: 
+- I suggest the use of python enviroments: [Python Enviroments](https://docs.python.org/3/library/venv.html)
+- Check requirements.txt for pip packages intallation
+- Check Dockerfile for addictional OS packages you may miss
+- An actual tutorial for local installations is in the TODO list
 
 1. Navigate to the `src` directory:
 
+   Inside the repository folder get in `src`, run:
    ```bash
    cd src
    ```
@@ -127,19 +134,19 @@ Before setting up your own client, it's important to understand the server archi
 2. Run the server directly with Python:
 
    ```bash
-   python3 layer_server.py
+   python3 whisper_server.py
    ```
 
 3. To use a microphone for audio input:
 
    ```bash
-   python3 client.py
+   python3 grpcclient.py
    ```
 
 4. To simulate audio streaming from a file:
 
    ```bash
-   python3 client.py <filepath>
+   python3 grpcclient.py --simulate <file-audio-path> 
    ```
 ## Credits
 
@@ -160,13 +167,16 @@ Thank you for helping improve this project and making it better for everyone!
 
 ## TODO
 - [x] Rapidfuzz token confirmation 
+- [x] grpc implementation
+- [ ] Secure grpc connections
 - [ ] Custom enviroment setup
-- [ ] grpc implementation
 - [ ] remove unused packages in Dockerfile and requirements 
 
 ## FIXED 
 - [x] Server fail to always return indipendent ports on concurrent requests now fixed
+- [x] Send back last confirmed token when client send silent audio for a prolonged time (or no human speech audio)
+- [x] Rarely other client words can end in others buffer 
+- [x] `MultiProcessingFasterWhisperASR` and the Grpc Speech to text services can get stuck with high number of streaming active concurrently (10 to 20)
 
 ## KNOWN BUGS - UNKNOWN CAUSE
-- [ ] Rarely other client words can end in others buffer 
-- [ ] `MultiProcessingFasterWhisperASR` and the `ParallelOnlineASRProcessor` instances can get stuck with high number of streaming active concurrently (10 to 20)
+- [ ] Random words like `ok` or `thank you` are transcribed when client stays silent 

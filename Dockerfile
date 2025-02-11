@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     tzdata \
+    libportaudio2 \
     && curl https://sh.rustup.rs -sSf | sh -s -- -y && \
     export PATH="/root/.cargo/bin:$PATH" && \
     rustup default stable && \
@@ -33,4 +34,4 @@ RUN pip install git+https://github.com/linto-ai/whisper-timestamped
 
 COPY src /app/src
 
-CMD ["python3", "layer_server.py"]
+CMD ["python3", "whisper_server.py"]
