@@ -15,10 +15,8 @@ class ParallelAudioBuffer:
         self._init_prompts = "" 
 
     def reset(self):
-        self._audio = np.array([],dtype=np.float32)
-        self._segment_times = []
-        self._ids = []
-        self._init_prompts = "" 
+        """basicall it resets all fields to fisrt constructor init"""
+        self.__dict__.update(self.__class__().__dict__)
 
     def append_token(self, id, audio, init_prompt=""):
         audio_lenth = len(audio)

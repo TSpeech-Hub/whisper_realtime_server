@@ -1,6 +1,7 @@
 numpy
 librosa
 soundfile
+sounddevice
 faster-whisper
 pyopenssl
 torchaudio
