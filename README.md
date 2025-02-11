@@ -41,7 +41,6 @@ cd whisper_realtime_server
    ```bash
    docker run --gpus all -p 50051:50051 --name whisper_server whisper_realtime_server
    ```
-
    - You can change the port range `50051:50051` if needed. Remember to change port on `whisper_server.py` and `gprcclient.py`.
    - The server is now running and ready to accept connections. You can access it at port `50051` using the `grpcclient.py` script.
 
