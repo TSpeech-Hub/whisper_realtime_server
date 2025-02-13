@@ -39,7 +39,6 @@ class ParallelAudioBuffer:
     def parameters(self):
         return copy.deepcopy(SimpleNamespace(ids=self._ids, audio=self._audio, segment_times=self._segment_times, init_prompts=self._init_prompts))
 
-#TODO: change fields visibility 
 class MultiProcessingFasterWhisperASR(FasterWhisperASR):
 
     def __init__(self, lan, logger, modelsize=None, cache_dir=None, model_dir=None, logfile=sys.stderr):
@@ -55,7 +54,8 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         super().__init__(lan, modelsize, cache_dir, model_dir, logfile=logfile)# cant use vad if segment times self.use_vad() 
 
     #also we use segment timing, if the segment time start is not zero it mean we have to normalize the words time by segment start 
-    def ts_words_normalized(self, segments):
+    @staticmethod
+    def ts_words_normalized(segments):
         # return: transcribe result object to [(beg,end,"word1"), ...]
         o = []
         for (start, segment) in segments:
@@ -108,16 +108,19 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             self._buffer.reset()
 
         segments, _ = self.model.transcribe(buffer_args.audio, batch_size=16, multilingual=True, initial_prompt=buffer_args.init_prompts,beam_size=5, word_timestamps=True, condition_on_previous_text=True, clip_timestamps=buffer_args.segment_times) #check if info util
+
         with self._transctiptions_lock: # assoc, client ids and time offset to segments for helping the processors syncronize
+            segments_list = list(segments)
             self._last_transcribed.extend(list(zip(
                 buffer_args.ids, 
-                [time["start"]/ParallelOnlineASRProcessor.SAMPLING_RATE for time in buffer_args.segment_times],list(segments)
+                [time["start"]/ParallelOnlineASRProcessor.SAMPLING_RATE for time in buffer_args.segment_times],
+                segments_list
             ))) 
             [e.set() for e in events] # set all client event to let them get the transcription 
 
         self._last_transcript_time = time.time() - timestamp 
         self._log.debug(f"transcription time: {self._last_transcript_time} seconds")
-        time.sleep(0.05) # help client syncronize... #TODO: find a better way to syncronize
+        time.sleep(0.02) # help client syncronize... #TODO: find a better way to syncronize
     
     def get_last_transcribed(self, id):
         """
@@ -127,9 +130,10 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         with self._transctiptions_lock:
             self._log.debug(f"Requesting segments for id: {id}")
             user_segments = [(start, s) for (i, start, s) in self._last_transcribed if i == id]
+            self._log.debug(f"Returning: {[seg.text for (_, seg) in user_segments]}")
             if user_segments:
-                self._log.debug(f"Current last_transcribed: {self._last_transcribed}")
-                self._last_transcribed = [(i, start, s) for (i, start, s) in self._last_transcribed if i != id]
+                #self._log.debug(f"Current last_transcribed: {self._last_transcribed}")
+                self._last_transcribed = [(i, start, seg) for (i, start, seg) in self._last_transcribed if i != id]
             return user_segments 
 
     #TODO: define the loop structure for the parallel processing best practices using this asr template 
@@ -162,7 +166,21 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
     def buffer_time_seconds(self):
         return len(self.audio_buffer)/self.SAMPLING_RATE
 
-    #TODO: remove huge logging 
+    def _chunk_buffer_at(self):
+        """
+        Chunking the audio buffer on the end timestamps of the last committed words.
+        """
+        # Chunking here check original OnlineASRProcessor: chunck the buffer on on last committed work  
+        k = len(self.commited)-1
+        s = self.buffer_trimming_sec
+        if self.buffer_time_seconds > s and k >= 0:
+            l = self.buffer_time_offset + self.buffer_time_seconds - (s//2) 
+            while k>0 and self.commited[k][1] > l:
+                k -= 1
+            t = self.commited[k][1] 
+            self._logger.debug(f"chunking segment at word {self.commited[-1]} at {t}")
+            self.chunk_at(t)
+
     def parallel_process_iter(self):
         """
         Runs on the current audio buffer.
@@ -173,17 +191,18 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         """
         #NOTE: checkout original process iter for understanding the process, i removed some comments for a more compact code 
         prompt, _ = self.prompt()
+        self._logger.debug("ITERATION START\n")
         self._logger.debug(f"transcribing {self.buffer_time_seconds:2.2f} seconds from {self.buffer_time_offset:2.2f}")
-        self._logger.debug(f"confirmed text: {self.transcript_buffer.commited_in_buffer}")
+        #self._logger.debug(f"confirmed text: {self.transcript_buffer.commited_in_buffer}") #uncomment if you want to debug the confirmed text insed the buffer at the moment 
 
         self.asr.append_audio(id(self), self._transcription_done, self.audio_buffer, prompt) #WARNING:Blocking: wait for shared asr's buffer lock to push audio
         x = self.asr._last_transcript_time
-        t = x + 1 if 0 < x < 1 else x # timeout min is 2 second, we balance the timeout with the last transcription time
+        t = 1 if 0 <= x < 1 else x # timeout min is 2 second, we balance the timeout with the last transcription time
         self._transcription_done.wait(timeout=t*2) #WARNING: Blocking: wait for transcription to complete, timeout to avoid rare deadlocks
         self._transcription_done.clear()
 
         res = self.asr.get_last_transcribed(id(self))
-        tsw = self.asr.ts_words_normalized(res)
+        tsw = MultiProcessingFasterWhisperASR.ts_words_normalized(res)
 
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
         o = self.transcript_buffer.flush()
@@ -193,17 +212,9 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         the_rest = self.to_flush(self.transcript_buffer.complete())
         self._logger.debug(f"INCOMPLETE: {the_rest}")
 
-        # Chunking here check original OnlineASRProcessor: chunck the buffer on on last committed work  
-        k = len(self.commited)-1
-        s = self.buffer_trimming_sec
-        if self.buffer_time_seconds > s and k >= 0:
-            l = self.buffer_time_offset + self.buffer_time_seconds - (s // 2)
-            while k>0 and self.commited[k][1] > l:
-                k -= 1
-            t = self.commited[k][1] 
-            self._logger.debug(f"chunking segment at word {self.commited[-1]} at {t}")
-            self.chunk_at(t)
+        self._chunk_buffer_at() # chunking the buffer 
 
         self._logger.info(f"len of buffer now: {self.buffer_time_seconds:2.2f}")
+        self._logger.debug("ITERATION END \n")
         return self.to_flush(o)
 

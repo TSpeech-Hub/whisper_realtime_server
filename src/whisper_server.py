@@ -46,13 +46,12 @@ SHARED_WHISPER_ASR = MultiProcessingFasterWhisperASR(
     logger=setup_logging("asr"), 
         modelsize=WHISPER_CONFIG.model
 )
-SHARED_WHISPER_ASR.warmup(WHISPER_CONFIG.warmup_file)
 
 #NOTE: gRPC service class
 class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
 
     _lock = threading.Lock()
-    MAX_WORKERS = 10
+    MAX_WORKERS = 20
     _logger_counter = 0
 
     @classmethod
@@ -118,22 +117,20 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 if audio_queue.empty(): # break if receiver dies 
                     if not receiver.is_alive():
                         break
-                    time.sleep(0.1) #wait for audio chunk to arrive next audio chunk.  TODO: find better solution
                     continue
 
-                audio_batch.clear()
                 while not audio_queue.empty(): #Read all the audio chunks in the queue
                     try:
                         audio_batch.extend(audio_queue.get())
                     except queue.Empty:
                         break            
 
-                if len(audio_batch) != 0:
+                if len(audio_batch) > 0:
                     a = np.array(audio_batch, dtype=np.float32) #TODO: normalize only if needed (should be done directly by the client)
+                    audio_batch.clear()
                     online.insert_audio_chunk(a)
                     raw = online.parallel_process_iter()
                     transcripted = self.format_output_transcript(last_end, raw)
-
                     if transcripted is not None: # send actual result back to the client
                         yield speech_pb2.Transcript(text=transcripted) 
         except Exception as e:
@@ -145,6 +142,7 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
             online.finish()
 
 def serve():
+    SHARED_WHISPER_ASR.warmup(WHISPER_CONFIG.warmup_file)
     threading.Thread(target=SHARED_WHISPER_ASR.realtime_parallel_asr_loop, daemon=True).start() #NOTE: this is a local shared whisper model working in parallel
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=SpeechToTextServicer.MAX_WORKERS), options=GRPC_SERVER_OPTIONS)
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(SpeechToTextServicer(), server)
