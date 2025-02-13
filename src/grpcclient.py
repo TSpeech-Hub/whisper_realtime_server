@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-import argparse, time, grpc, sounddevice as sd, librosa
-import speech_pb2, speech_pb2_grpc 
+import argparse
+import time
+import grpc
+import sounddevice as sd
+import librosa
+
+import speech_pb2
+import speech_pb2_grpc 
 
 # Audio configuration
 class AudioConfig:
@@ -11,10 +17,11 @@ class AudioConfig:
 
 # gRPC client for transcription
 class TranscriptorClient:
-    def __init__(self, host: str, port: int, simulate_filepath: str = None):
+    def __init__(self, host: str, port: int, simulate_filepath: str = None, interactive: bool = False):
         self.host = host
         self.port = port
         self.simulate_filepath = simulate_filepath
+        self.interactive = interactive
 
     def generate_audio_chunks(self):
         """
@@ -31,10 +38,9 @@ class TranscriptorClient:
             # Split into 1-second chunks
             for i in range(0, total_samples, AudioConfig.chunk_size):
                 chunk = audio_data[i:i+AudioConfig.chunk_size]
-                if len(chunk) < AudioConfig.chunk_size:
-                    # If the last chunk is incomplete, you can choose to skip it
-                    break
-                # Create and return the AudioChunk message
+                #if len(chunk) < AudioConfig.chunk_size and len(audio_data) - i+AudioConfig.chunk_size:
+                    # Skip incomplete last chunk
+                    #break
                 yield speech_pb2.AudioChunk(samples=chunk.tolist())
                 # Simulate real-time sending
                 time.sleep(AudioConfig.chunk_duration)
@@ -47,8 +53,7 @@ class TranscriptorClient:
                 while True:
                     # Read a chunk from the microphone (returns a tuple (data, overflow_flag))
                     audio_data, _ = stream.read(AudioConfig.chunk_size)
-                    # audio_data is a numpy array of shape (chunk_size, channels)
-                    # Assuming mono: flatten the array
+                    # Flatten the array (assuming mono audio)
                     chunk_samples = audio_data.flatten()
                     yield speech_pb2.AudioChunk(samples=chunk_samples.tolist())
                     time.sleep(AudioConfig.chunk_duration)
@@ -57,6 +62,7 @@ class TranscriptorClient:
         """
         Creates the gRPC connection, sends audio chunks via bidirectional streaming,
         and prints the transcriptions received from the server.
+        In interactive mode, the transcript is updated on a single line.
         """
         # Create gRPC channel and stub
         channel = grpc.insecure_channel(f"{self.host}:{self.port}")
@@ -67,9 +73,22 @@ class TranscriptorClient:
 
         # Start the bidirectional call
         responses = stub.StreamingRecognize(audio_generator)
+        transcript_so_far = ""
         try:
+            last_resp_time = 0
             for response in responses:
-                print("Received transcription:", response.text)
+                if self.interactive:
+                    # Update the transcript on the same line.
+                    resp = response.text.split(" ", maxsplit=2)
+                    transcript = resp[2] 
+                # Clear the line and write the updated transcript
+                    if transcript[-1] == "." and int(resp[0]) - last_resp_time > 1500:
+                        print(transcript)
+                    else:
+                        print(transcript, end="", flush=True)
+                    last_resp_time = int(resp[0])
+                else:
+                    print("Received transcription:", response.text)
         except grpc.RpcError as e:
             print("gRPC Error:", e)
         finally:
@@ -81,10 +100,13 @@ def main():
     parser.add_argument('--port', type=int, default=50051, help='gRPC server port')
     parser.add_argument('--simulate', type=str, default=None,
                         help='Path to the audio file to use in simulation mode')
+    parser.add_argument('--interactive', action='store_true',
+                        help='Display transcript updates interactively on a single line')
     args = parser.parse_args()
 
-    client = TranscriptorClient(host=args.host, port=args.port, simulate_filepath=args.simulate)
+    client = TranscriptorClient(host=args.host, port=args.port, simulate_filepath=args.simulate, interactive=args.interactive)
     client.run()
 
 if __name__ == '__main__':
     main()
+
