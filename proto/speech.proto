@@ -11,9 +11,10 @@ message AudioChunk {
   // timestamp can be used to align the audio chunks and testing
 }
 
-// TODO: may add more metadata 
 message Transcript {
-  string text = 1;
+  int32 start_time_millis = 1;
+  int32 end_time_millis = 2;
+  string text = 3;
 }
 
 // Bidirectional streaming

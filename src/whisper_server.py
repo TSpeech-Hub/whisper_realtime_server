@@ -6,7 +6,7 @@ from argparse import Namespace
 
 import numpy as np
 import grpc
-import speech_pb2, speech_pb2_grpc
+from generated import speech_pb2_grpc, speech_pb2
 from parallel_whisper_online import MultiProcessingFasterWhisperASR, ParallelOnlineASRProcessor
 
 #NOTE: LOGGING SETUP FUNCTION
@@ -69,7 +69,7 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 beg = max(beg, last_end)
 
             last_end = end
-            return "%1.0f %1.0f %s" % (beg,end,o[2])
+            return (int(round(beg)),int(round(end)),o[2])
         else:
             return None
 
@@ -130,9 +130,9 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                     audio_batch.clear()
                     online.insert_audio_chunk(a)
                     raw = online.parallel_process_iter()
-                    transcripted = self.format_output_transcript(last_end, raw)
-                    if transcripted is not None: # send actual result back to the client
-                        yield speech_pb2.Transcript(text=transcripted) 
+                    fmt_t = self.format_output_transcript(last_end, raw)
+                    if fmt_t is not None: # send actual result back to the client
+                        yield speech_pb2.Transcript(start_time_millis=fmt_t[0], end_time_millis=fmt_t[1],text=fmt_t[2]) 
         except Exception as e:
             logger.exception(f"{e}")
             LOGGER.error(f"Error {e} in {logger.name}")

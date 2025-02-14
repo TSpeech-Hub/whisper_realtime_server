@@ -5,8 +5,7 @@ import grpc
 import sounddevice as sd
 import librosa
 
-import speech_pb2
-import speech_pb2_grpc 
+from generated import speech_pb2_grpc, speech_pb2
 
 # Audio configuration
 class AudioConfig:
@@ -73,22 +72,19 @@ class TranscriptorClient:
 
         # Start the bidirectional call
         responses = stub.StreamingRecognize(audio_generator)
-        transcript_so_far = ""
         try:
             last_resp_time = 0
             for response in responses:
                 if self.interactive:
-                    # Update the transcript on the same line.
-                    resp = response.text.split(" ", maxsplit=2)
-                    transcript = resp[2] 
+                    # Update the transcript on the same line. 
                 # Clear the line and write the updated transcript
-                    if transcript[-1] == "." and int(resp[0]) - last_resp_time > 1500:
-                        print(transcript)
+                    if response.text[-1] == "." and  response.start_time_millis - last_resp_time > 1000:
+                        print(response.text)
                     else:
-                        print(transcript, end="", flush=True)
-                    last_resp_time = int(resp[0])
+                        print(response.text, end="", flush=True)
+                    last_resp_time = response.end_time_millis
                 else:
-                    print("Received transcription:", response.text)
+                    print(f"Received transcription: {response.start_time_millis} {response.end_time_millis} {response.text}")
         except grpc.RpcError as e:
             print("gRPC Error:", e)
         finally:
