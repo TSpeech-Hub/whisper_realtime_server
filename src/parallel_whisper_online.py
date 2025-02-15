@@ -28,6 +28,7 @@ class ParallelAudioBuffer:
         self._segment_times.append({"start": buffer_length, "end":(buffer_length + audio_lenth)})
         self._ids.append(id)
         self._audio = np.append(self._audio, audio)
+        self._audio = np.append(self._audio, np.zeros(1000, dtype=np.float32))
 
     @property
     def size(self):
@@ -37,7 +38,8 @@ class ParallelAudioBuffer:
         return self.size ==  0
 
     def parameters(self):
-        return copy.deepcopy(SimpleNamespace(ids=self._ids, audio=self._audio, segment_times=self._segment_times, init_prompts=self._init_prompts))
+        ns = SimpleNamespace(ids=self._ids, audio=self._audio, segment_times=self._segment_times, init_prompts=self._init_prompts)
+        return copy.deepcopy(ns)
 
 class MultiProcessingFasterWhisperASR(FasterWhisperASR):
 
@@ -64,7 +66,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                 if segment.no_speech_prob > 0.9:
                     continue
                 # not stripping the spaces -- should not be merged with them!
-                t = (word.start - start, word.end - start, word.word)
+                t = (round(word.start - start, 4), round(word.end - start, 4), word.word)
                 o.append(t)
         return o
 
@@ -111,7 +113,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
 
         with self._transctiptions_lock: # assoc, client ids and time offset to segments for helping the processors syncronize
             segments_list = list(segments)
-            self._last_transcribed.extend(list(zip(
+            self._last_transcribed = (list(zip(
                 buffer_args.ids, 
                 [time["start"]/ParallelOnlineASRProcessor.SAMPLING_RATE for time in buffer_args.segment_times],
                 segments_list
@@ -133,7 +135,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             self._log.debug(f"Returning: {[seg.text for (_, seg) in user_segments]}")
             if user_segments:
                 #self._log.debug(f"Current last_transcribed: {self._last_transcribed}")
-                self._last_transcribed = [(i, start, seg) for (i, start, seg) in self._last_transcribed if i != id]
+                self._last_transcribed = [(i, start, seg) for (i, start, seg) in self._last_transcribed if i != id] #removing id's transcriptions
             return user_segments 
 
     #TODO: define the loop structure for the parallel processing best practices using this asr template 
@@ -161,6 +163,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         super().__init__(asr)
         self._logger = logger
         self._transcription_done = threading.Event()
+        self._buffer_trimming_sec = 10
 
     @property
     def buffer_time_seconds(self):

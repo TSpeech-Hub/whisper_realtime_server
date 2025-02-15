@@ -10,7 +10,7 @@ from generated import speech_pb2_grpc, speech_pb2
 # Audio configuration
 class AudioConfig:
     sample_rate = 16000 
-    chunk_duration = 1
+    chunk_duration = 0.5
     channels = 1
     chunk_size = int(sample_rate * chunk_duration)  
 
