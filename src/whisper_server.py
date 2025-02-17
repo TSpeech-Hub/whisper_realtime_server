@@ -7,9 +7,9 @@ from argparse import Namespace
 import numpy as np
 import grpc
 from generated import speech_pb2_grpc, speech_pb2
-from parallel_whisper_online import MultiProcessingFasterWhisperASR, ParallelOnlineASRProcessor
+from parallel_whisper_online import *
 
-#NOTE: LOGGING SETUP FUNCTION
+# LOGGING SETUP FUNCTION
 def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
     os.makedirs(log_folder, exist_ok=True)
 
@@ -30,24 +30,20 @@ def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
 
 LOGGER = setup_logging("Layer-server", use_stdout=True)
 
-#NOTE: Config Constants
+# Config Constants
 with open("config.json") as file: 
     WHISPER_CONFIG = Namespace(**json.load(file))
 
-#NOTE: we should keep the streaming alive, there can be silence during the audio stream
+# should keep the streaming alive, there can be silence during the audio stream
 GRPC_SERVER_OPTIONS = [
     ('grpc.keepalive_time_ms', 10000),           # ping every 10 seconds  
     ('grpc.keepalive_timeout_ms', 5000),           # timeout of 5 seconds for the pong response 
     ('grpc.keepalive_permit_without_calls', 1),    # ping without activer rpc  
 ]
 
-SHARED_WHISPER_ASR = MultiProcessingFasterWhisperASR(
-    lan="auto", 
-    logger=setup_logging("asr"), 
-        modelsize=WHISPER_CONFIG.model
-)
+PARALLEL_ASR = ParallelRealtimeASR(modelsize=WHISPER_CONFIG.model, logger=setup_logging("asr"), warmup_file=WHISPER_CONFIG.warmup_file)
 
-#NOTE: gRPC service class
+# gRPC service class
 class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
 
     _lock = threading.Lock()
@@ -69,9 +65,9 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 beg = max(beg, last_end)
 
             last_end = end
-            return (int(round(beg)),int(round(end)),o[2])
+            return (int(round(beg)),int(round(end)),o[2]), last_end
         else:
-            return None
+            return None, last_end
 
     def request_enqueuer(self, request_iterator, audio_queue, logger):
         """
@@ -91,20 +87,20 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
         The real-time speech-to-text streaming service.
         """
 
-        logger = setup_logging(f"Whisper-server-{self.get_unique_logger_name()}") 
+        id = self.get_unique_logger_name()
+        logger = setup_logging(f"Whisper-server-{id}") 
         logger.info("Server started") # starting the online asr
         LOGGER.info(f"Started connection on {logger.name}")
-
-        online = ParallelOnlineASRProcessor( #setting up the asr 
-            SHARED_WHISPER_ASR, 
-            logger=logger,
-        )
+        #setting up the processor, should not call asr outside, but this is an exceptional case to make a single model work with legacy code
+        #ParallelOnlineASRProcessor will not modify the asr object 
+        online = ParallelOnlineASRProcessor(asr=PARALLEL_ASR.asr, logger=logger)
 
         try:
             online.init()
-            last_end = None # for formatting the output, same format used in original whisper-streaming server
+            last_end = None # for formatting the output, same format used in original whisper-streaming server 
 
-            audio_queue = queue.Queue() # received thread setup 
+            audio_queue = queue.Queue() # received thread setup, these queues are thread sage
+            result = {"result": None}  # resut holder
             receiver = threading.Thread(
                 target=self.request_enqueuer, 
                 args=(request_iterator, audio_queue, logger), 
@@ -113,10 +109,19 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
             receiver.start()
 
             audio_batch = []
+            is_first = True
+
             while(True):
                 if audio_queue.empty(): # break if receiver dies 
                     if not receiver.is_alive():
                         break
+                    continue
+                # this is made so that the service is registered only when it get some audio 
+                # for the first time and not at the exact moment the client connects
+                # this ensure the running services are not slowed by new incoming connections 
+                if is_first: 
+                    PARALLEL_ASR.register_processor(id, online, result)
+                    is_first = False
                     continue
 
                 while not audio_queue.empty(): #Read all the audio chunks in the queue
@@ -125,25 +130,31 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                     except queue.Empty:
                         break            
 
-                if len(audio_batch) > 0:
-                    a = np.array(audio_batch, dtype=np.float32) #TODO: normalize only if needed (should be done directly by the client)
-                    audio_batch.clear()
-                    online.insert_audio_chunk(a)
-                    raw = online.parallel_process_iter()
-                    fmt_t = self.format_output_transcript(last_end, raw)
-                    if fmt_t is not None: # send actual result back to the client
-                        yield speech_pb2.Transcript(start_time_millis=fmt_t[0], end_time_millis=fmt_t[1],text=fmt_t[2]) 
+                a = np.array(audio_batch, dtype=np.float32) #TODO: normalize only if needed (should be done directly by the client)
+                audio_batch.clear()
+                online.insert_audio_chunk(a)
+
+                PARALLEL_ASR.set_processor_ready(id)
+                PARALLEL_ASR.wait()
+
+                if result["result"] == None: continue # if we set ready while the asr is transcribing we will receive the event of transcription end adn break the waiting
+                # but this means the asr did dont trasctibe our buffer we need to restart 
+                # (this can only happend upon first connection) #TODO: a better way to solve this
+                fmt_t, last_end = self.format_output_transcript(last_end, result["result"]) #TODO: is last end useful?
+                if fmt_t is not None: # send actual result back to the client
+                    yield speech_pb2.Transcript(start_time_millis=fmt_t[0], end_time_millis=fmt_t[1],text=fmt_t[2]) 
         except Exception as e:
             logger.exception(f"{e}")
             LOGGER.error(f"Error {e} in {logger.name}")
         finally:
             logger.info("Finished streaming process")
             LOGGER.info(f"Finished streaming process in {logger.name}")
-            online.finish()
+            PARALLEL_ASR.unregister_processor(id) 
+            # no need to online.finish() the processor, this thread is going to shut down, 
+            # a new one will be instantiated for new connections in new threads
 
-def serve():
-    SHARED_WHISPER_ASR.warmup(WHISPER_CONFIG.warmup_file)
-    threading.Thread(target=SHARED_WHISPER_ASR.realtime_parallel_asr_loop, daemon=True).start() #NOTE: this is a local shared whisper model working in parallel
+def serve(): #TODO: handle clients that take to long to send messages and are slowing everyone
+    PARALLEL_ASR.start()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=SpeechToTextServicer.MAX_WORKERS), options=GRPC_SERVER_OPTIONS)
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(SpeechToTextServicer(), server)
     server.add_insecure_port('[::]:50051') #TODO: add secure port 
