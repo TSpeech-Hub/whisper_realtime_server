@@ -250,7 +250,7 @@ class HypothesisBuffer:
         self.commited_in_buffer = []
         self.buffer = []
         self.new = []
-        self.fuzz_threshold = 90
+        self.fuzz_threshold = 95
 
         self.last_commited_time = 0
         self.last_commited_word = None
