@@ -120,8 +120,10 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 # for the first time and not at the exact moment the client connects
                 # this ensure the running services are not slowed by new incoming connections 
                 if is_first: 
-                    PARALLEL_ASR.register_processor(id, online, result)
-                    is_first = False
+                    if audio_queue.qsize() > 1:
+                        PARALLEL_ASR.register_processor(id, online, result)
+                        is_first = False
+                        LOGGER.debug(f"whisper-service-{id} I accumulated 2 chunks for the first time, ready!")
                     continue
 
                 while not audio_queue.empty(): #Read all the audio chunks in the queue
@@ -136,11 +138,12 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
 
                 PARALLEL_ASR.set_processor_ready(id)
                 PARALLEL_ASR.wait()
+                t = result["result"]
 
-                if result["result"] == None: continue # if we set ready while the asr is transcribing we will receive the event of transcription end adn break the waiting
+                if t == None: continue # if we set ready while the asr is transcribing we will receive the event of transcription end adn break the waiting
                 # but this means the asr did dont trasctibe our buffer we need to restart 
                 # (this can only happend upon first connection) #TODO: a better way to solve this
-                fmt_t, last_end = self.format_output_transcript(last_end, result["result"]) #TODO: is last end useful?
+                fmt_t, last_end = self.format_output_transcript(last_end, t) #TODO: is last end useful?
                 if fmt_t is not None: # send actual result back to the client
                     yield speech_pb2.Transcript(start_time_millis=fmt_t[0], end_time_millis=fmt_t[1],text=fmt_t[2]) 
         except Exception as e:
