@@ -34,4 +34,4 @@ RUN pip install git+https://github.com/linto-ai/whisper-timestamped
 
 COPY src /app/src
 
-CMD ["python3", "whisper_server.py"]
+CMD ["python3", "-u", "whisper_server.py"]

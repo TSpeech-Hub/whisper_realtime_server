@@ -72,14 +72,9 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         if filepath: 
             if os.path.isfile(filepath):
                 audio = load_audio_chunk(filepath,0,1)
-                result = self.model.transcribe(
-                    audio,
-                    beam_size=5, 
-                    multilingual=True, 
-                    word_timestamps=True, 
-                    batch_size=8 # 16 was producing to high WER using clip_timestamps for some reason, 8 is the default
-                )
-                list(result)
+                buffer = ParallelAudioBuffer()
+                buffer.append_token(1, audio)
+                self.transcribe_parallel(buffer)
 
 
     def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
@@ -108,7 +103,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             multilingual=True, 
             word_timestamps=True, 
             clip_timestamps=parameters.segment_times,
-            batch_size=8, 
+            batch_size=16, 
         ) #check if info util
 
         # segments is the segment generator produced by transcribe, applying list generate the segments
