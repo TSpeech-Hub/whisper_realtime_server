@@ -1,6 +1,8 @@
 # whisper\_realtime\_server
 
-**Most of the information in this README is still a work in progress**
+
+> [!WARNING]
+> Most of the informations in README are work in progress `whisper_realtime_server` is under development.
 
 ## Installation
 
@@ -86,26 +88,49 @@ if you want to run the client directly in the docker container follow these step
 
 3. Run the grpc client
 
-   - Run the client using your system microphone 
+   - Run the client using your system microphone:
       ```bash
       python3 grpcclient.py 
       ```
-   - Run a realtime simulation using an audio file
+   - Run a realtime simulation using an audio file:
       ```bash
       python3 grpcclient.py --simulate ../resources/sample1.wav 
+      ```
+      You can also try a new interactive mode (WORK IN PROGRESS):
+
+      ```bash
+      python3 grpcclient.py --simulate ../resources/sample1.wav --interactive
+      ```
+      this will print results as sentences insead of timestamps and segments on the client. 
+      Standard output:
+
+      ```
+      0 600 Hi my names
+      1000 2300 is Dario, nice 
+      3000 4500 to meet you.
+      5000 7000 How are you?
+      ``` 
+      Interactive output:
+
+      ```
+      Hi my names is Dario, nice to meet you. 
+      How are you? 
       ```
 
 ### Custom Environment
 
-#### TODO
+> [!IMPORTANT]
+> TODO 
 
 ## Whisper Server Config File JSON Tutorial
 
-For now, avoid modifying the `config.json` file. If you need to experiment, it is advisable to only adjust the model size parameter.
+> [!CAUTION]
+> For now, avoid modifying the `config.json` file. If you need to experiment, it is advisable to only adjust the model size parameter.
 
 ## Num Workers and Token Confirmation Threshold
 
-### TODO Tweaking tutorial and explanation
+> [!IMPORTANT]
+> TODO: tweaking tutorial and explanation
 
 ## Nvidia Developer Kit
 
@@ -113,7 +138,8 @@ The Nvidia Developer Kit is required for GPU support. The server has been tested
 
 ## Documentation
 
-TODO - Add documentation
+> [!IMPORTANT]
+> TODO: Add more documentation
 
 Before setting up your own client, it's important to understand the server architecture. The client first connects to a GRPC server on the default port (`50051`). After connecting, the GRPC server assigns a service to the client. Then the client streams audio data to this port, and receives real-time transcriptions.&#x20;
 
