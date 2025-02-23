@@ -29,6 +29,7 @@ class TranscriptorClient:
         otherwise, it captures live audio from the microphone.
         Each chunk is sent as an AudioChunk message.
         """
+        print("Started connection")
         if self.simulate_filepath:
             # Simulation mode: load audio file (using librosa)
             audio_data, sr = librosa.load(self.simulate_filepath, sr=AudioConfig.sample_rate, mono=True)
