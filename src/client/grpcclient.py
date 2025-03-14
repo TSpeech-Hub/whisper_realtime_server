@@ -5,12 +5,12 @@ import grpc
 import sounddevice as sd
 import librosa
 
-from generated import speech_pb2_grpc, speech_pb2
+from src.generated import speech_pb2_grpc, speech_pb2
 
 # Audio configuration
 class AudioConfig:
     sample_rate = 16000 
-    chunk_duration = 0.5
+    chunk_duration = 1 
     channels = 1
     chunk_size = int(sample_rate * chunk_duration)  
 
@@ -22,6 +22,35 @@ class TranscriptorClient:
         self.simulate_filepath = simulate_filepath
         self.interactive = interactive
 
+    def __generate_audio_chunks_sim(self):
+        # Simulation mode: load audio file (using librosa)
+        audio_data, sr = librosa.load(self.simulate_filepath, sr=AudioConfig.sample_rate, mono=True)
+        total_samples = len(audio_data)
+        print(f"Loaded {total_samples} samples from file {self.simulate_filepath}")
+        # Split into 1-second chunks
+        for i in range(0, total_samples, AudioConfig.chunk_size):
+            chunk = audio_data[i:i+AudioConfig.chunk_size]
+            #if len(chunk) < AudioConfig.chunk_size and len(audio_data) - i+AudioConfig.chunk_size:
+                # Skip incomplete last chunk
+                #break
+            yield speech_pb2.AudioChunk(samples=chunk.tolist())
+            # Simulate real-time sending
+            time.sleep(AudioConfig.chunk_duration)
+
+    def __generate_audio_chunks_live(self):
+        # Live mode: use the microphone
+        print("Capturing real-time audio from the microphone...")
+        with sd.InputStream(channels=AudioConfig.channels,
+                            samplerate=AudioConfig.sample_rate,
+                            blocksize=AudioConfig.chunk_size) as stream:
+            while True:
+                # Read a chunk from the microphone (returns a tuple (data, overflow_flag))
+                audio_data, _ = stream.read(AudioConfig.chunk_size)
+                # Flatten the array (assuming mono audio)
+                chunk_samples = audio_data.flatten()
+                yield speech_pb2.AudioChunk(samples=chunk_samples.tolist())
+                time.sleep(AudioConfig.chunk_duration)
+
     def generate_audio_chunks(self):
         """
         Iteratively generates 1-second audio chunks.
@@ -31,32 +60,9 @@ class TranscriptorClient:
         """
         print("Started connection")
         if self.simulate_filepath:
-            # Simulation mode: load audio file (using librosa)
-            audio_data, sr = librosa.load(self.simulate_filepath, sr=AudioConfig.sample_rate, mono=True)
-            total_samples = len(audio_data)
-            print(f"Loaded {total_samples} samples from file {self.simulate_filepath}")
-            # Split into 1-second chunks
-            for i in range(0, total_samples, AudioConfig.chunk_size):
-                chunk = audio_data[i:i+AudioConfig.chunk_size]
-                #if len(chunk) < AudioConfig.chunk_size and len(audio_data) - i+AudioConfig.chunk_size:
-                    # Skip incomplete last chunk
-                    #break
-                yield speech_pb2.AudioChunk(samples=chunk.tolist())
-                # Simulate real-time sending
-                time.sleep(AudioConfig.chunk_duration)
+            return self.__generate_audio_chunks_sim()
         else:
-            # Live mode: use the microphone
-            print("Capturing real-time audio from the microphone...")
-            with sd.InputStream(channels=AudioConfig.channels,
-                                samplerate=AudioConfig.sample_rate,
-                                blocksize=AudioConfig.chunk_size) as stream:
-                while True:
-                    # Read a chunk from the microphone (returns a tuple (data, overflow_flag))
-                    audio_data, _ = stream.read(AudioConfig.chunk_size)
-                    # Flatten the array (assuming mono audio)
-                    chunk_samples = audio_data.flatten()
-                    yield speech_pb2.AudioChunk(samples=chunk_samples.tolist())
-                    time.sleep(AudioConfig.chunk_duration)
+            return self.__generate_audio_chunks_live()
 
     def run(self):
         """
@@ -103,7 +109,3 @@ def main():
 
     client = TranscriptorClient(host=args.host, port=args.port, simulate_filepath=args.simulate, interactive=args.interactive)
     client.run()
-
-if __name__ == '__main__':
-    main()
-

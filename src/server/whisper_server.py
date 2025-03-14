@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-import logging, os, sys, json, threading,  queue
+import logging, os, sys
 from datetime import datetime
 from concurrent import futures
-from argparse import Namespace
 
 import numpy as np
 import grpc
 from grpc import aio
 import asyncio
 import itertools
-from generated import speech_pb2_grpc, speech_pb2
-from parallel_whisper_online import *
+from src.generated import speech_pb2_grpc, speech_pb2
+from src.parallel_whisper_online import *
 
 # LOGGING SETUP FUNCTION
 def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
@@ -33,10 +32,25 @@ def setup_logging(log_name, use_stdout=False, log_folder="server_logs"):
 
 LOGGER = setup_logging("Layer-server", use_stdout=True)
 
-# Config Constants
-# contains the default values for the server (check in config.json)
-with open("config.json") as file: 
-    WHISPER_CONFIG = Namespace(**json.load(file))
+# Config Constants for th server 
+# Not everything is used 
+WHISPER_CONFIG = SimpleNamespace(
+    warmup_file="../resources/sample1.wav",
+    model="large-v3-turbo",
+    backend="faster-whisper",
+    language=None,
+    min_chunk_size=1.0,
+    model_cache_dir=None,
+    model_dir=None,
+    lan="en",
+    task="transcribe",
+    vac=False,
+    vac_chunk_size=0.04,
+    vad=True,
+    buffer_trimming="segment",
+    buffer_trimming_sec=15,
+    log_level="DEBUG",
+)
 
 # should keep the streaming alive, there can be silence during the audio stream
 GRPC_SERVER_OPTIONS = [
@@ -63,10 +77,11 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
     """
 
     MAX_WORKERS = 20
-    service_id = itertools.cycle(range(1, MAX_WORKERS+1))
+    LOGS = False # set to true id you want to log every asr on separate files, care for filedescriptor limit error (too many files opened)
+    service_id = itertools.count()
 
     @classmethod
-    def get_unique_logger_name(cls): 
+    def get_unique_name(cls): 
         # this is safe thanks to cpython GIL running in 
         return f"Whisper-service-{next(cls.service_id)}"
 
@@ -91,8 +106,14 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
             return (int(round(beg)), int(round(end)), o[2]), last_end
         else:
             return None, last_end
+    
+    def log_setup(self, id):
+        if self.LOGS:
+            return setup_logging(f"{id}") 
+        else:
+            return logging.getLogger(__name__)
 
-    async def __request_enqueuer(self, request_iterator, audio_queue, logger):
+    async def __request_enqueuer(self, request_iterator, audio_queue, logger, id):
         """
         Run in a separate thread.
         Reads audio chunk from iterator and puts it in the queue,
@@ -104,7 +125,9 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 await audio_queue.put(audio_chunk.samples)
         except Exception as e:
             logger.exception(f"{e}")
-            LOGGER.error(f"Error {e} in {logger.name}")
+            LOGGER.error(f"Error {e} in Request Enqueuer {id}")
+
+    ### Main service function ###
 
     async def StreamingRecognize(self, request_iterator, context):
         """
@@ -113,28 +136,37 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
         Starts the request_enqueuer (non blocking receive)
         """
 
-        id = self.get_unique_logger_name()
-        logger = setup_logging(f"{id}") 
+        id = self.get_unique_name()
+        logger = self.log_setup(id)
+
         logger.info("Server started") # starting the online asr
-        LOGGER.info(f"Started connection on {logger.name}")
-        #setting up the processor, should not call asr outside, but this is an exceptional case to make a single model work with legacy code
-        #ParallelOnlineASRProcessor will not modify the asr object 
+        LOGGER.info(f"Started connection on {id}")
         last_end = None # for formatting the output, same format used in original whisper-streaming server 
         audio_batch = [] # used to collect chunks in the audio batch
         is_first = True # understand if first iteration
 
-        online = ParallelOnlineASRProcessor(asr=PARALLEL_ASR.asr, logger=logger)
+        #setting up the processor, should not call asr outside, but this is an exceptional case to make a single model work with legacy code
+        online = ParallelOnlineASRProcessor(asr=PARALLEL_ASR.asr, logger=logger) #ParallelOnlineASRProcessor will not modify the asr object 
         audio_queue = asyncio.Queue() # received thread setup, these queues are thread sage
-        request_task = asyncio.create_task(self.__request_enqueuer(request_iterator, audio_queue, logger)) # unblocking receiver coroutine
+        request_task = asyncio.create_task(self.__request_enqueuer(request_iterator, audio_queue, logger, id)) # unblocking receiver coroutine
 
         try:
             # the asyncio.sleeps return the control to the event loop,
             # helping other coroutines (services) to progress
             online.init()
             while True:
-                if audio_queue.empty(): # break if receiver dies 
-                    if request_task.done():
-                        break
+                if request_task.done(): # break if receiver dies 
+                    t_final = online.flush_everything()
+                    fmt_t_final, _ = self.format_output_transcript(last_end, t_final)
+                    if fmt_t_final is not None:
+                        yield speech_pb2.Transcript(
+                            start_time_millis=fmt_t_final[0],
+                            end_time_millis=fmt_t_final[1],
+                            text=fmt_t_final[2]
+                        )
+                    break
+
+                if audio_queue.empty(): 
                     await asyncio.sleep(0.01)
                     continue
                 # this is made so that the service is registered only when it get some audio 
@@ -144,7 +176,7 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                     if audio_queue.qsize() > 1:
                         PARALLEL_ASR.register_processor(id, online)
                         is_first = False
-                        LOGGER.debug(f"whisper-service-{id} I accumulated {audio_queue.qsize()} chunks for the first time, ready!")
+                        LOGGER.debug(f"whisper-service-{id} accumulated {audio_queue.qsize()} chunks for the first time")
                     else:
                         await asyncio.sleep(0.01)
                         continue
@@ -157,24 +189,27 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 audio_batch.clear()
 
                 PARALLEL_ASR.set_processor_ready(id)
-                await asyncio.to_thread(PARALLEL_ASR.wait)# wait for transcription event to be signaled (blocking call converted to async sleep)
+
+                await PARALLEL_ASR.wait()# async wait for transcription event to be signaled 
+
                 t = online.results
-                if t is None:
-                    continue
+                if t is None: continue
                 # but this means the asr did dont trasctibe our buffer we need to restart 
                 # (this can only happen upon first connection) #TODO: a better way to solve this
                 fmt_t, last_end = self.format_output_transcript(last_end, t)
                 if fmt_t is not None: # send actual result back to the client
-                    yield speech_pb2.Transcript(start_time_millis=fmt_t[0],
-                                                  end_time_millis=fmt_t[1],
-                                                  text=fmt_t[2])
+                    yield speech_pb2.Transcript(
+                        start_time_millis=fmt_t[0],
+                        end_time_millis=fmt_t[1],
+                        text=fmt_t[2]
+                    )
         except Exception as e:
             logger.exception(f"{e}")
-            LOGGER.error(f"Error {e} in {logger.name}")
+            LOGGER.exception(f"Error {e} in id {id}")
         finally:
-            logger.info("Finished streaming process")
-            LOGGER.info(f"Finished streaming process in {logger.name}")
             PARALLEL_ASR.unregister_processor(id)
+            logger.info(r"Finished streaming process of {id}")
+            LOGGER.info(f"Finished streaming process in {id}")
 
 async def serve():
     """
@@ -182,23 +217,22 @@ async def serve():
     then waits until termination.
     """
     PARALLEL_ASR.start()
-    server = aio.server(futures.ThreadPoolExecutor(max_workers=SpeechToTextServicer.MAX_WORKERS),
-                        options=GRPC_SERVER_OPTIONS)
+    server = aio.server(
+        futures.ThreadPoolExecutor(max_workers=SpeechToTextServicer.MAX_WORKERS), 
+        options=GRPC_SERVER_OPTIONS
+    )
+
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(SpeechToTextServicer(), server)
     server.add_insecure_port('[::]:50051') #TODO: add secure port 
     server.add_insecure_port('[::]:50052') #TODO: find optimal port range 
+
     await server.start()
     LOGGER.info("Server started")
-    try: 
-        await server.wait_for_termination()
-    except KeyboardInterrupt:
-        LOGGER.error("Interrupted")
-    finally:
-        await server.stop(0)
+
+    try: await server.wait_for_termination()
+    except KeyboardInterrupt: LOGGER.error("Interrupted")
+    finally: await server.stop(0)
 
 def main():
     asyncio.run(serve())
-
-if __name__ == '__main__':
-    main()
 

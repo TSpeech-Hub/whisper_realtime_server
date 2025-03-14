@@ -1,6 +1,7 @@
+import asyncio
 import numpy as np, logging, os, threading, time, copy
 from types import SimpleNamespace
-from whisper_online import FasterWhisperASR, OnlineASRProcessor, load_audio_chunk
+from src.whisper_online import FasterWhisperASR, OnlineASRProcessor, load_audio_chunk
 
 class ParallelAudioBuffer:
     """A shared audio buffer for parallel processing.
@@ -102,6 +103,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         segments, _ = self.model.transcribe(
             parameters.audio, 
             beam_size=5, 
+            condition_on_previous_text=False, 
             multilingual=True, 
             word_timestamps=True, 
             clip_timestamps=parameters.segment_times,
@@ -109,8 +111,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
         ) #check if info util
 
         # segments is the segment generator produced by transcribe, applying list generate the segments
-        # list(segments) is the real consuming part of generating transcriptions
-        segment_list = list(segments)
+        segment_list = list(segments) # list(segments) is the real consuming part of generating transcriptions
 
         #[self._log.info(s.text) for s in segment_list] #log the segments just transcribed
         # this part zip (processor_id, start_time, segment) to the corresponding id
@@ -145,6 +146,14 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
     @property
     def buffer_time_seconds(self):
         return len(self.audio_buffer)/self.SAMPLING_RATE
+
+    def flush_everything(self):
+        """
+        Flushes the buffer and returns the results.
+        """
+        self.__logger.debug("Flushing everything")
+        return self.to_flush(self.transcript_buffer.complete())
+
 
     def update(self, results):
         self.__logger.debug("ITERATION START\n")
@@ -223,7 +232,7 @@ class ParallelRealtimeASR():
     def __init__(self, modelsize="large-v3-turbo", logger=logging.getLogger(__name__), warmup_file=None): # type specified for a more comprehensive code 
         self.__registered_pids: Dict[int, RegisteredProcess] = {} # dict of {processor_id; (processor, result_holder)}
         self.__register_lock = threading.RLock()
-        self.__transcription_event = threading.Event()
+        self.__transcription_event = asyncio.Event()
         self.__audio_buffer = ParallelAudioBuffer()
         self.__logger = logger
         self.__thread = threading.Thread(target=self.__asr_loop, args=(), daemon=True)
@@ -259,15 +268,15 @@ class ParallelRealtimeASR():
     def start(self):
         self.__thread.start()
 
-    def set_processor_ready(self, id): #TODO do this better this must have a lock
+    def set_processor_ready(self, id):
         with self.__register_lock:
             if id in self.__registered_pids:
                 self.__registered_pids[id].ready_flag = True
             else: 
                 raise ValueError(f"{id} is not a registered processor.") 
 
-    def wait(self):
-        self.__transcription_event.wait(timeout=2) #TODO: set a timeout
+    async def wait(self):
+        await self.__transcription_event.wait() #TODO: find a way to timeout
 
     def __all_pid_ready(self):
         with self.__register_lock:
