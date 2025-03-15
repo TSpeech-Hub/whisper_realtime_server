@@ -176,7 +176,7 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                     if audio_queue.qsize() > 1:
                         PARALLEL_ASR.register_processor(id, online)
                         is_first = False
-                        LOGGER.debug(f"whisper-service-{id} accumulated {audio_queue.qsize()} chunks for the first time")
+                        LOGGER.debug(f"{id} accumulated {audio_queue.qsize()} chunks for the first time")
                     else:
                         await asyncio.sleep(0.01)
                         continue
@@ -208,7 +208,7 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
             LOGGER.exception(f"Error {e} in id {id}")
         finally:
             PARALLEL_ASR.unregister_processor(id)
-            logger.info(r"Finished streaming process of {id}")
+            logger.info(f"Finished streaming process of {id}")
             LOGGER.info(f"Finished streaming process in {id}")
 
 async def serve():
