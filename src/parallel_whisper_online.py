@@ -1,7 +1,7 @@
 import asyncio
 import numpy as np, logging, os, threading, time, copy
 from types import SimpleNamespace
-from src.whisper_online import FasterWhisperASR, OnlineASRProcessor, load_audio_chunk
+from src.whisper_online import *
 
 class ParallelAudioBuffer:
     """A shared audio buffer for parallel processing.
@@ -26,7 +26,7 @@ class ParallelAudioBuffer:
         self._segment_times.append({"start": buffer_length, "end":(buffer_length + audio_lenth)})
         self._ids.append(id)
         self._audio = np.append(self._audio, audio)
-        #self._audio = np.append(self._audio, np.zeros(1000, dtype=np.float32))
+        self._audio = np.append(self._audio, np.zeros(100, dtype=np.float32))
 
     @property
     def size(self):
@@ -60,7 +60,7 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
             if segment.no_speech_prob > 0.9:
                 continue
             # not stripping the spaces -- should not be merged with them!
-            t = (round(word.start - start, 4), round(word.end - start, 4), word.word)
+            t = (round(word.start - start, 5), round(word.end - start, 5), word.word)
             o.append(t)
         return o
 
@@ -130,6 +130,38 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
 
         return results_tagged 
 
+# unused at the moment
+class FuzzHypothesisBuffer(HypothesisBuffer):
+
+    def __init__(self):
+        self.last_penultimate_end = 0
+        super().__init__()
+
+    def insert(self, new, offset):
+        # Shift timestamps by offset and filter out words before the last committed time.
+        shifted = [(a + offset, b + offset, t) for a, b, t in new]
+        filtered = [entry for entry in shifted if entry[0] > self.last_commited_time - 0.1]
+        
+        # Append the filtered words to the current 'new' buffer.
+        self.new.extend(filtered)
+        
+        # Update the buffer to mirror the current 'new' list.
+        self.buffer = list(self.new)
+
+    def flush(self):
+        # Confirm all words except the last two.
+        commit = []
+        if len(self.new) > 2:
+            commit = self.new[:-2]  # Confirm everything up to (but not including) the penultimate word.
+            self.new = self.new[-2:]  # Leave the last two words unconfirmed.
+        # If there are two or fewer words, we don't commit anything.
+        
+        # Add the confirmed words to the overall committed buffer.
+        self.commited_in_buffer.extend(commit)
+        # Update the working buffer.
+        self.buffer = list(self.new)
+        return commit
+
 class ParallelOnlineASRProcessor(OnlineASRProcessor):
     """An OnlineASRProcessor that can be used in parallel with other processors.
 
@@ -141,7 +173,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         super().__init__(asr)
         self.__logger = logger
         self.__result = None
-        self.buffer_trimming_sec = 10 #overwriting defaulr trimming sec 
+        self.buffer_trimming_sec = 15 #overwriting default trimming sec 
 
     @property
     def buffer_time_seconds(self):
@@ -223,12 +255,10 @@ class ParallelRealtimeASR():
     Multiple processors can be registered at the same time, running asynchronously. 
     The asr will handle synchronization and transcription of the audio streams.
 
-    Check out whisper_server.py for an example of how to use this class.
+    Check out whisper_server.py for an example of this class usage.
 
-    Instance attributes: TODO
     """
 
-    #TODO: add documentation
     def __init__(self, modelsize="large-v3-turbo", logger=logging.getLogger(__name__), warmup_file=None): # type specified for a more comprehensive code 
         self.__registered_pids: Dict[int, RegisteredProcess] = {} # dict of {processor_id; (processor, result_holder)}
         self.__register_lock = threading.RLock()
@@ -276,7 +306,10 @@ class ParallelRealtimeASR():
                 raise ValueError(f"{id} is not a registered processor.") 
 
     async def wait(self):
-        await self.__transcription_event.wait() #TODO: find a way to timeout
+        try:
+            await asyncio.wait_for(self.__transcription_event.wait(), timeout=2) 
+        except asyncio.TimeoutError:
+            self.__logger.error("Timeout waiting for transcription")
 
     def __all_pid_ready(self):
         with self.__register_lock:

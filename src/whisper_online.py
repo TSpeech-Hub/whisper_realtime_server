@@ -243,7 +243,6 @@ class OpenaiApiASR(ASRBase):
     def set_translate_task(self):
         self.task = "translate"
 
-
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
@@ -251,7 +250,7 @@ class HypothesisBuffer:
         self.buffer = []
         self.new = []
         self.fuzz_threshold = 95
-        self._confirm_threshold = 2 # > 0, if not confirmed anything for 3 times in a row, confirm it anyway
+        self._confirm_threshold = 2 # > 0, if not confirmed anything for 2 times in a row, confirm it anyway
         self._unconfirmed_count = 0 # count unconfrimed times
 
         self.last_commited_time = 0
@@ -270,13 +269,15 @@ class HypothesisBuffer:
             a,b,t = self.new[0]
             if abs(a - self.last_commited_time) < 1:
                 if self.commited_in_buffer:
+                    ### changed with fuzz ratio from original identical match
                     # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in commited and new. If they are, they're dropped.
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
-                    for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum #TODO: whi 5?
+                    for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum #TODO: why limited?
                         c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
-                        if c == tail :
+                        ratio = fuzz.QRatio(c, tail, processor=utils.default_process)  
+                        if ratio >= self.fuzz_threshold:
                             words = []
                             for j in range(i):
                                 words.append(repr(self.new.pop(0)))
@@ -285,7 +286,7 @@ class HypothesisBuffer:
                             break
 
     ### Changes from the original code 
-    #helper for flush
+    #helper for flush not used in any other place
     def __commit_and_pop(self, commit_word_list, num_buffer_pops, commit):
         if not commit_word_list: return
 
@@ -309,14 +310,14 @@ class HypothesisBuffer:
 
             if len(self.buffer) == 0: break
 
-            if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) > self.fuzz_threshold:
+            if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) >= self.fuzz_threshold:
                 self.__commit_and_pop([self.new[0]], 1, commit)
 
             elif  self._unconfirmed_count > self._confirm_threshold-1:
                 if len(self.buffer) > 1 and fuzz.QRatio(nt, self.buffer[1][2], processor=utils.default_process):
-                    self.__commit_and_pop([self.new[0], self.buffer[0]], 2, commit)
+                    self.__commit_and_pop([self.new[0]], 2, commit)
 
-                elif len(self.new) > 1 and fuzz.QRatio(self.buffer[0][2], self.new[1][2], processor=utils.default_process):
+                elif len(self.buffer) > 1 and fuzz.QRatio(self.buffer[0][2], self.new[1][2], processor=utils.default_process):
                         self.__commit_and_pop(self.new[:2], 1, commit)
                 else: break
             else: break

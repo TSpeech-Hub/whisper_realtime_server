@@ -52,12 +52,6 @@ WHISPER_CONFIG = SimpleNamespace(
     log_level="DEBUG",
 )
 
-# should keep the streaming alive, there can be silence during the audio stream
-GRPC_SERVER_OPTIONS = [
-    ('grpc.keepalive_time_ms', 10000),           # ping every 10 seconds  
-    ('grpc.keepalive_timeout_ms', 5000),           # timeout of 5 seconds for the pong response 
-    ('grpc.keepalive_permit_without_calls', 1),    # ping without activer rpc  
-]
 
 PARALLEL_ASR = ParallelRealtimeASR(modelsize=WHISPER_CONFIG.model, logger=setup_logging("asr"), warmup_file=WHISPER_CONFIG.warmup_file)
 
@@ -173,12 +167,12 @@ class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
                 # for the first time and not at the exact moment the client connects
                 # this ensure the running services are not slowed by new incoming connections 
                 if is_first: 
+                    await asyncio.sleep(0.01)
                     if audio_queue.qsize() > 1:
                         PARALLEL_ASR.register_processor(id, online)
                         is_first = False
                         LOGGER.debug(f"{id} accumulated {audio_queue.qsize()} chunks for the first time")
                     else:
-                        await asyncio.sleep(0.01)
                         continue
 
                 while not audio_queue.empty(): #Read all the audio chunks in the queue
@@ -219,7 +213,6 @@ async def serve():
     PARALLEL_ASR.start()
     server = aio.server(
         futures.ThreadPoolExecutor(max_workers=SpeechToTextServicer.MAX_WORKERS), 
-        options=GRPC_SERVER_OPTIONS
     )
 
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(SpeechToTextServicer(), server)
