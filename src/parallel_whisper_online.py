@@ -76,6 +76,9 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
                 buffer = ParallelAudioBuffer()
                 buffer.append_token(1, audio)
                 self.transcribe_parallel(buffer)
+                self._log.info("asr is warmed up") 
+            else: self._log.info(f"{filepath} not found")
+        else: self._log.info("no warmup file provided or file not found")
 
 
     def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
@@ -270,7 +273,6 @@ class ParallelRealtimeASR():
         self.__logger.info("asr created") 
         if warmup_file:
             self.__asr.warmup(warmup_file)
-            self.__logger.info("asr is warmed up") 
 
     @property
     def asr(self):

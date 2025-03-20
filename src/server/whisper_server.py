@@ -35,7 +35,7 @@ LOGGER = setup_logging("Layer-server", use_stdout=True)
 # Config Constants for th server 
 # Not everything is used 
 WHISPER_CONFIG = SimpleNamespace(
-    warmup_file="../resources/sample1.wav",
+    warmup_file="resources/sample1.wav",
     model="large-v3-turbo",
     backend="faster-whisper",
     language=None,
