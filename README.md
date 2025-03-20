@@ -1,4 +1,4 @@
-# whisper\_realtime\_server
+# Whisper\_Realtime\_Server
 
 
 > [!WARNING]
@@ -90,28 +90,28 @@ if you want to run the client directly in the docker container follow these step
 
    - Run the client using your system microphone:
       ```bash
-      python3 grpcclient.py 
+      python3 -m src.client
       ```
-   - Run a realtime simulation using an audio file:
+   - All the possible options
       ```bash
-      python3 grpcclient.py --simulate ../resources/sample1.wav 
+      options:
+        -h, --help           show this help message and exit
+        --host HOST          gRPC server address
+        --port PORT          gRPC server port
+        --simulate SIMULATE  Simulation mode: Path to the audio file to simulate a realtime audio
+                             stream with
+        --interactive        Display transcript updates interactively on a single line
       ```
-      You can also try a new interactive mode (WORK IN PROGRESS):
 
-      ```bash
-      python3 grpcclient.py --simulate ../resources/sample1.wav --interactive
-      ```
-      this will print results as sentences insead of timestamps and segments on the client. 
       Standard output:
-
       ```
       0 600 Hi my names
       1000 2300 is Dario, nice 
       3000 4500 to meet you.
       5000 7000 How are you?
       ``` 
-      Interactive output:
 
+      Interactive output:
       ```
       Hi my names is Dario, nice to meet you. 
       How are you? 
@@ -147,34 +147,41 @@ Before setting up your own client, it's important to understand the server archi
 
 Install all dependencies: 
 - I suggest the use of python enviroments: [Python Enviroments](https://docs.python.org/3/library/venv.html)
-- Check requirements.txt for pip packages intallation
 - Check Dockerfile for addictional OS packages you may miss
-- An actual tutorial for local installations is in the TODO list
+- An actual better tutorial for local installations is in the TODO list
 
-1. Navigate to the `src` directory:
+1. Install the requirements.txt:
+   In the project root directory execute
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Generate the pytgon-grpc files for grpc:
+   ```bash
+   make proto
+   ```
+
+2. Navigate to the `src` directory:
 
    Inside the repository folder get in `src`, run:
    ```bash
    cd src
    ```
 
-2. Run the server directly with Python:
+3. Run the server directly with Python:
 
    ```bash
-   python3 whisper_server.py
+   python3 -m src.server
    ```
 
-3. To use a microphone for audio input:
+4. To use a microphone for audio input:
 
    ```bash
-   python3 grpcclient.py
+   python3 -m src.client
    ```
 
-4. To simulate audio streaming from a file:
+   Check the docker section for client running options
 
-   ```bash
-   python3 grpcclient.py --simulate <file-audio-path> 
-   ```
 ## Credits
 
 - This project uses parts of the Whisper Streaming project. Other projects involved in whisper streaming are credited in their repo, check it out: [whisper streaming](https://github.com/ufal/whisper_streaming)
@@ -204,6 +211,7 @@ Thank you for helping improve this project and making it better for everyone!
 - [x] Send back last confirmed token when client send silent audio for a prolonged time (or no human speech audio)
 - [x] Rarely other client words can end in others buffer 
 - [x] `MultiProcessingFasterWhisperASR` and the Grpc Speech to text services can get stuck with high number of streaming active concurrently (10 to 20)
+- [x] ValueError(f"{id} is not a registered processor.") at end of services
 
 ## KNOWN BUGS - UNKNOWN CAUSE
 - [ ] Random words like `ok` or `thank you` are transcribed when client stays silent 

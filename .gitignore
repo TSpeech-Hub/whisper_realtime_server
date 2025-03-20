@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# proto and generated files 
+src/generated/
 
 # C extensions
 *.so

@@ -243,7 +243,6 @@ class OpenaiApiASR(ASRBase):
     def set_translate_task(self):
         self.task = "translate"
 
-
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
@@ -251,6 +250,8 @@ class HypothesisBuffer:
         self.buffer = []
         self.new = []
         self.fuzz_threshold = 95
+        self._confirm_threshold = 2 # > 0, if not confirmed anything for 2 times in a row, confirm it anyway
+        self._unconfirmed_count = 0 # count unconfrimed times
 
         self.last_commited_time = 0
         self.last_commited_word = None
@@ -268,13 +269,15 @@ class HypothesisBuffer:
             a,b,t = self.new[0]
             if abs(a - self.last_commited_time) < 1:
                 if self.commited_in_buffer:
+                    ### changed with fuzz ratio from original identical match
                     # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in commited and new. If they are, they're dropped.
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
-                    for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum 
+                    for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum #TODO: why limited?
                         c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
-                        if c == tail :
+                        ratio = fuzz.QRatio(c, tail, processor=utils.default_process)  
+                        if ratio >= self.fuzz_threshold:
                             words = []
                             for j in range(i):
                                 words.append(repr(self.new.pop(0)))
@@ -282,23 +285,45 @@ class HypothesisBuffer:
                             logger.debug(f"removing last {i} words: {words_msg}")
                             break
 
+    ### Changes from the original code 
+    #helper for flush not used in any other place
+    def __commit_and_pop(self, commit_word_list, num_buffer_pops, commit):
+        if not commit_word_list: return
+
+        for w in commit_word_list:
+            self.new.pop(0)
+            commit.append((w[0],w[1],w[2]))
+        self.last_commited_word = commit_word_list[-1][2] #nt
+        self.last_commited_time = commit_word_list[-1][1] #nb
+        self.buffer = self.buffer[num_buffer_pops:]
+        self._unconfirmed_count = 0
+
+
     def flush(self):
-        # returns commited chunk = the longest common prefix of 2 last inserts. 
+        ### Changes from the original code for reduced delay at cost of more errors.
+        # returns commited chunk similar to (levenshtein distance) the longest common prefix of 2 last inserts. 
+        # if no confirmation for 3 times, it confirms it anyway
 
         commit = []
         while self.new:
             na, nb, nt = self.new[0]
 
-            if len(self.buffer) == 0:
-                break
-            if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) > self.fuzz_threshold:
-                commit.append((na,nb,nt))
-                self.last_commited_word = nt
-                self.last_commited_time = nb
-                self.buffer.pop(0)
-                self.new.pop(0)
-            else:
-                break
+            if len(self.buffer) == 0: break
+
+            if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) >= self.fuzz_threshold:
+                self.__commit_and_pop([self.new[0]], 1, commit)
+
+            elif  self._unconfirmed_count > self._confirm_threshold-1:
+                if len(self.buffer) > 1 and fuzz.QRatio(nt, self.buffer[1][2], processor=utils.default_process):
+                    self.__commit_and_pop([self.new[0]], 2, commit)
+
+                elif len(self.buffer) > 1 and fuzz.QRatio(self.buffer[0][2], self.new[1][2], processor=utils.default_process):
+                        self.__commit_and_pop(self.new[:2], 1, commit)
+                else: break
+            else: break
+
+        if not commit: self._unconfirmed_count += 1
+
         self.buffer = self.new
         self.new = []
         self.commited_in_buffer.extend(commit)
