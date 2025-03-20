@@ -3,7 +3,7 @@ FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-WORKDIR /app/src
+WORKDIR /app/
 
 RUN apt-get update && apt-get install -y \
     vim \
@@ -31,7 +31,13 @@ COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
 RUN pip install -U openai-whisper
 RUN pip install git+https://github.com/linto-ai/whisper-timestamped 
+RUN pip install --no-cache-dir grpcio grpcio-tools protobuf==5.29.0
 
 COPY src /app/src
+COPY Makefile /app/
+COPY proto /app/proto
+COPY fix_proto_imports.py /app/
 
-CMD ["python3", "-u", "whisper_server.py"]
+RUN make proto
+
+CMD ["python3", "-u", "-m", "src.server"]

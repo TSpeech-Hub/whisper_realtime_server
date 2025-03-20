@@ -102,7 +102,7 @@ def main():
     parser.add_argument('--host', type=str, default='localhost', help='gRPC server address')
     parser.add_argument('--port', type=int, default=50051, help='gRPC server port')
     parser.add_argument('--simulate', type=str, default=None,
-                        help='Path to the audio file to use in simulation mode')
+                        help='Simulation mode: Path to the audio file to simulate a realtime audio stream with')
     parser.add_argument('--interactive', action='store_true',
                         help='Display transcript updates interactively on a single line')
     args = parser.parse_args()
