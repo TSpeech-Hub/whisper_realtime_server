@@ -312,15 +312,15 @@ class HypothesisBuffer:
 
             if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) >= self.fuzz_threshold:
                 self.__commit_and_pop([self.new[0]], 1, commit)
+            else: break
 
-            elif  self._unconfirmed_count > self._confirm_threshold-1:
+            """elif  self._unconfirmed_count > self._confirm_threshold-1:
                 if len(self.buffer) > 1 and fuzz.QRatio(nt, self.buffer[1][2], processor=utils.default_process):
                     self.__commit_and_pop([self.new[0]], 2, commit)
 
                 elif len(self.buffer) > 1 and fuzz.QRatio(self.buffer[0][2], self.new[1][2], processor=utils.default_process):
                         self.__commit_and_pop(self.new[:2], 1, commit)
-                else: break
-            else: break
+                else: break"""
 
         if not commit: self._unconfirmed_count += 1
 
