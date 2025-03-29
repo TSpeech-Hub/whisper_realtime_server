@@ -176,7 +176,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         super().__init__(asr)
         self.__logger = logger
         self.__result = None
-        self.buffer_trimming_sec = 15 #overwriting default trimming sec 
+        self.buffer_trimming_sec = 10 #overwriting default trimming sec 
 
     @property
     def buffer_time_seconds(self):
@@ -231,14 +231,15 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
             self.__logger.debug(f"chunking segment at word {self.commited[-1]} at {t}")
             self.chunk_at(t)
 
-from typing import Dict, Tuple, Any
+from typing import Dict
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 @dataclass
 class RegisteredProcess():
     """Store data used to progress the ParallalASRProcess in parallel
     """
-    online : ParallelOnlineASRProcessor 
+    asr_processor : ParallelOnlineASRProcessor 
     ready_flag : bool = False
 
 class ParallelRealtimeASR():
@@ -283,10 +284,10 @@ class ParallelRealtimeASR():
         """
         return self.__asr
 
-    def register_processor(self, id, online_asr):
+    def register_processor(self, id, asr_processor):
         with self.__register_lock:
             self.__registered_pids[id] = RegisteredProcess(
-                online=online_asr,
+                asr_processor=asr_processor,
                 ready_flag=False,
             )
 
@@ -346,20 +347,20 @@ class ParallelRealtimeASR():
                     for processor_id in self.__registered_pids:
                         processor = self.__registered_pids[processor_id]
                         #result_holder["result"] = None 
-                        self.append_audio(processor_id, processor.online.audio_buffer) 
+                        self.append_audio(processor_id, processor.asr_processor.audio_buffer) 
                     self.__logger.debug(f"Shared buffer samples: {len(self.__audio_buffer)}")
 
                 # this will block until the transcribe is done can take more than 1 second
                 results = self.__asr.transcribe_parallel(self.__audio_buffer)
+                self.__audio_buffer.reset()
 
                 with self.__register_lock: 
                     for (processor_id, result) in results:
                         processors = current_processors[processor_id]
-                        processors.online.update(result) 
-                        self.__logger.debug(f"Result {processor_id}: {processors.online.results}")
+                        processors.asr_processor.update(result) 
+                        self.__logger.debug(f"Result {processor_id}: {processors.asr_processor.results}")
 
                 self.__transcription_event.set()
-                self.__audio_buffer.reset()
                 timestamp = time.time()
 
         except KeyboardInterrupt:
