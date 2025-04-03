@@ -3,7 +3,6 @@ import logging, os, sys
 from datetime import datetime
 from concurrent import futures
 from contextlib import asynccontextmanager
-from async_timeout import timeout 
 
 import numpy as np
 from grpc import aio
@@ -121,12 +120,11 @@ class ProcessorManager:
         # this is made so that the service is registered only when it get some audio 
         # for the first time and not at the exact moment the client connects
         # this ensure the running services are not slowed by new incoming connections 
-        try:
-            async with timeout(self.__timeout): # timeout if no audiochunks arrive
-                while self.audio_queue.qsize() < 2: # wait for the first two audio chunks
-                    await asyncio.sleep(0.01)
-                PARALLEL_ASR.register_processor(self.id, self.processor)
-                LOGGER.debug(f"{self.id} accumulated {self.audio_queue.qsize()} chunks for the first time")
+        try: #TODO: timeout
+            while self.audio_queue.qsize() < 2: # wait for the first two audio chunks
+                await asyncio.sleep(0.01)
+            PARALLEL_ASR.register_processor(self.id, self.processor)
+            LOGGER.debug(f"{self.id} accumulated {self.audio_queue.qsize()} chunks for the first time")
 
             yield #here is where the processor is used
 
