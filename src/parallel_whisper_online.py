@@ -133,38 +133,6 @@ class MultiProcessingFasterWhisperASR(FasterWhisperASR):
 
         return results_tagged 
 
-# unused at the moment
-class FuzzHypothesisBuffer(HypothesisBuffer):
-
-    def __init__(self):
-        self.last_penultimate_end = 0
-        super().__init__()
-
-    def insert(self, new, offset):
-        # Shift timestamps by offset and filter out words before the last committed time.
-        shifted = [(a + offset, b + offset, t) for a, b, t in new]
-        filtered = [entry for entry in shifted if entry[0] > self.last_commited_time - 0.1]
-        
-        # Append the filtered words to the current 'new' buffer.
-        self.new.extend(filtered)
-        
-        # Update the buffer to mirror the current 'new' list.
-        self.buffer = list(self.new)
-
-    def flush(self):
-        # Confirm all words except the last two.
-        commit = []
-        if len(self.new) > 2:
-            commit = self.new[:-2]  # Confirm everything up to (but not including) the penultimate word.
-            self.new = self.new[-2:]  # Leave the last two words unconfirmed.
-        # If there are two or fewer words, we don't commit anything.
-        
-        # Add the confirmed words to the overall committed buffer.
-        self.commited_in_buffer.extend(commit)
-        # Update the working buffer.
-        self.buffer = list(self.new)
-        return commit
-
 class ParallelOnlineASRProcessor(OnlineASRProcessor):
     """An OnlineASRProcessor that can be used in parallel with other processors.
 
