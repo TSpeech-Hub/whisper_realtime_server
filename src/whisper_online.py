@@ -158,7 +158,6 @@ class HypothesisBuffer:
         self.last_commited_word = commit_word_list[-1][2] #nt
         self.last_commited_time = commit_word_list[-1][1] #nb
         self.buffer = self.buffer[num_buffer_pops:]
-        self._unconfirmed_count = 0
 
 
     def flush(self):

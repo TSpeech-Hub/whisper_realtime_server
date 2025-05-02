@@ -3,6 +3,7 @@ import logging, os, sys
 from datetime import datetime
 from concurrent import futures
 from contextlib import asynccontextmanager
+import traceback
 
 import numpy as np
 from grpc import aio
@@ -59,205 +60,178 @@ SERVER_CONFIG = SimpleNamespace(
     ports=[50051, 50052],
 )
 
-# should be used only inside one single service 
-class TrascriptionManager:
-
+class TranscriptionManager:
     def __init__(self):
         self.last_end = None
 
-    def format_transcript(self, t): 
-        """
-        Code from original whisper_online_server.py
-        Formats the asr output properly for the client:
-            eg: 1500 3600 this is a message
-        the first three words are:
-        - Emission time from beginning of processing, in milliseconds
-        - beginnign and end timestamp of the text segment, as estimated by 
-          Whisper model. The timestamps are not accurate, but they're useful anyway
-        - Corresponing text segment transcription.
-        """
-        if t[0] is not None:
+    def format_transcript(self, t):
+        if t and t[0] is not None: # what if t is null
             beg, end = t[0]*1000, t[1]*1000
             if self.last_end is not None:
                 beg = max(beg, self.last_end)
-
-            if beg < 0: beg = 0 
+            if beg < 0: beg = 0
             self.last_end = end
-            return (int(round(beg)), int(round(end)), t[2])
+            return True, (int(round(beg)), int(round(end)), t[2])
         else:
-            return None
+            return False, (0, 0, "")
 
-
-# should be used only inside one single service 
 class ProcessorManager:
-
     def __init__(self, id, logger, timeout=5.0):
-        self.processor = ParallelOnlineASRProcessor(asr=PARALLEL_ASR.asr, logger=logger) #ParallelOnlineASRProcessor will not modify the asr object 
-        self.audio_queue = asyncio.Queue() # received thread setup, these queues are thread sage
+        self.processor = ParallelOnlineASRProcessor(asr=PARALLEL_ASR.asr, logger=logger)
+        self.audio_queue = asyncio.Queue()
         self.id = id
         self.logger = logger
         self.__timeout = timeout
 
     async def insert_audio(self):
-        """
-        Insert audio chunks in the processor.
-        """
         audio_batch = []
-
-        while not self.audio_queue.empty(): #Read all the audio chunks in the queue
+        while not self.audio_queue.empty():
             chunk = await self.audio_queue.get()
             audio_batch.extend(chunk)
-
         self.processor.insert_audio_chunk(np.array(audio_batch, dtype=np.float32))
 
     @asynccontextmanager
     async def context(self):
-        """
-        Context manager to use the processor using the 'with' context
-        register, process inside thw 'with' statement and finally unregister the processor.
-        """
         self.processor.init()
-        # this is made so that the service is registered only when it get some audio 
-        # for the first time and not at the exact moment the client connects
-        # this ensure the running services are not slowed by new incoming connections 
-        try: #TODO: timeout
-            while self.audio_queue.qsize() < 2: # wait for the first two audio chunks
+        try:
+            while self.audio_queue.qsize() < 2:
                 await asyncio.sleep(0.01)
             PARALLEL_ASR.register_processor(self.id, self.processor)
-            LOGGER.debug(f"{self.id} accumulated {self.audio_queue.qsize()} chunks for the first time")
-
-            yield #here is where the processor is used
-
-        except asyncio.TimeoutError:
-            self.logger.warning(f"Timeout waiting for audio chunks in {self.id}")
-            LOGGER.warning(f"Timeout waiting for audio chunks in {self.id}")
-            raise
+            LOGGER.debug(f"{self.id} accumulated {self.audio_queue.qsize()} chunks")
+            yield
         except Exception as e:
-            self.logger.exception(f"Error {e} in {self.id}")  
-            LOGGER.exception(f"Error {e} in {self.id}")
+            LOGGER.error(f"Exception in ProcessorManager {self.id}: ") 
+            print(traceback.format_exception(e))
         finally:
             PARALLEL_ASR.unregister_processor(self.id)
+            LOGGER.debug(f"{self.id} finished processing")
 
-# gRPC service class
-class SpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
-    """
-    Implements the server part of the real-time speech-to-text 
-    bidirectional streaming service (The whisper streaming service).
-    """
-
+class CommonStreamingUtils:
     service_id = itertools.count()
 
     @classmethod
-    def __get_unique_name(cls): 
-        # this is safe thanks to cpython GIL running in 
+    def get_unique_name(cls):
         return f"Whisper-service-{next(cls.service_id)}"
-    
-    def __log_setup(self, id):
+
+    @staticmethod
+    def log_setup(id):
         if SERVER_CONFIG.log_every_processor:
-            return setup_logging(f"{id}") 
+            return setup_logging(f"{id}")
         else:
             return logging.getLogger(__name__)
 
-    async def __request_enqueuer(self, request_iterator, processor_manager):
-        """
-        Run in a separate thread.
-        Reads audio chunk from iterator and puts it in the queue,
-        this is a separate thread, to have a non blocking receiver 
-        for StreamingRecognize.
-        """
+    @staticmethod
+    async def request_enqueuer(request_iterator, processor_manager):
         try:
             async for audio_chunk in request_iterator:
                 await processor_manager.audio_queue.put(audio_chunk.samples)
         except Exception as e:
-            logger.exception(f"{e}")
-            LOGGER.error(f"Error {e} in Request Enqueuer {processor_manager.id}")
+            processor_manager.logger.error(f"Exception in request_enqueuer {processor_manager.id}: {e}")
 
-    def create_grpc_response(self, start, end, text):
+    @staticmethod
+    def create_response(start, end, text):
         return speech_pb2.Transcript(
             start_time_millis=start,
             end_time_millis=end,
             text=text
         )
 
-    ### Main service function ###
+    @staticmethod
+    def create_response_with_hypothesis(start_t, end_t, text, start_h, end_h, hypothesis):
+        return speech_pb2.TranscriptWithHypothesis(
+            confirmed=speech_pb2.Transcript(
+                start_time_millis=start_t,
+                end_time_millis=end_t,
+                text=text
+            ),
+            hypothesis=speech_pb2.Transcript(
+                start_time_millis=start_h,
+                end_time_millis=end_h,
+                text=hypothesis
+            )
+        )
+
+class StandardSpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
 
     async def StreamingRecognize(self, request_iterator, context):
-        """
-        Async real-time speech-to-text streaming service.
-        Keep transcribing until client stops streaming audio.
-        Starts the request_enqueuer (non blocking receive)
-        """
-        id = self.__get_unique_name()
-        logger = self.__log_setup(id)
-        logger.info("Server started") # starting the online asr
+        id = CommonStreamingUtils.get_unique_name()
+        logger = CommonStreamingUtils.log_setup(id)
         LOGGER.info(f"Started connection on {id}")
 
-        processor_manager = ProcessorManager(id, logger) # this is the processor manager, it will handle the audio chunks and the asr processor
-        transcript_manager = TrascriptionManager() 
+        processor_manager = ProcessorManager(id, logger)
+        transcript_manager = TranscriptionManager()
+        request_task = asyncio.create_task(CommonStreamingUtils.request_enqueuer(request_iterator, processor_manager))
 
-        request_task = asyncio.create_task(self.__request_enqueuer(
-            request_iterator,
-            processor_manager
-        )) # unblocking receiver coroutine
-
-        # this is the main loop, it will run until the client stops streaming
-        async with processor_manager.context(): 
+        async with processor_manager.context():
             while not request_task.done():
-                if processor_manager.audio_queue.empty(): 
+                if processor_manager.audio_queue.empty():
                     await asyncio.sleep(0.01)
                     continue
                 await processor_manager.insert_audio()
-
                 PARALLEL_ASR.set_processor_ready(id)
-
-                await PARALLEL_ASR.wait()# async wait for transcription event to be signaled 
-
+                await PARALLEL_ASR.wait()
                 transcript = processor_manager.processor.results
                 if transcript:
-                    # but this means the asr did dont trasctibe our buffer we need to restart 
-                    # (this can only happen upon first connection) #TODO: a better way to solve this
-                    fmt_t = transcript_manager.format_transcript(transcript)
-                    if fmt_t: # send actual result back to the client
-                        yield self.create_grpc_response(*fmt_t)  
+                    ok, fmt = transcript_manager.format_transcript(transcript)
+                    if ok:
+                        yield CommonStreamingUtils.create_response(*fmt)
 
-        # send the final result and close 
         final_transcript = processor_manager.processor.flush_everything()
-        fmt_final_t = transcript_manager.format_transcript(final_transcript)
-        if fmt_final_t:
-            yield self.create_grpc_response(*fmt_final_t)  
+        ok, fmt_final = transcript_manager.format_transcript(final_transcript)
+        if ok:
+            yield CommonStreamingUtils.create_response(*fmt_final)
 
-        logger.info(f"Finished streaming process of {id}")
-        LOGGER.info(f"Finished streaming process in {id}")
+class HypothesisSpeechToTextServicer(speech_pb2_grpc.SpeechToTextWithHypothesisServicer):
 
-### gRPC SERVER SETUP ###
+    async def StreamingRecognizeWithHypothesis(self, request_iterator, context):
+        id = CommonStreamingUtils.get_unique_name()
+        logger = CommonStreamingUtils.log_setup(id)
+        LOGGER.info(f"Started connection on {id}")
+
+        processor_manager = ProcessorManager(id, logger)
+        transcript_manager = TranscriptionManager()
+        hyp_transcript_manager = TranscriptionManager()
+        request_task = asyncio.create_task(CommonStreamingUtils.request_enqueuer(request_iterator, processor_manager))
+
+        async with processor_manager.context():
+            while not request_task.done():
+                if processor_manager.audio_queue.empty():
+                    await asyncio.sleep(0.01)
+                    continue
+                await processor_manager.insert_audio()
+                PARALLEL_ASR.set_processor_ready(id)
+                await PARALLEL_ASR.wait()
+                t = processor_manager.processor.results
+                h = processor_manager.processor.hypothesis
+                ok_t, fmt_t = transcript_manager.format_transcript(t)
+                ok_h, fmt_h = hyp_transcript_manager.format_transcript(h)
+                if ok_t or ok_h:
+                    yield CommonStreamingUtils.create_response_with_hypothesis(*fmt_t, *fmt_h)
+
+        final_t = processor_manager.processor.flush_everything()
+        ok, fmt_final = transcript_manager.format_transcript(final_t)
+        if ok:
+            yield CommonStreamingUtils.create_response_with_hypothesis(*fmt_final, 0, 0, "")
 
 async def serve():
-    """
-    Starts the asr, starts the grpc service pool and opens ports,
-    then waits until termination.
-    """
     PARALLEL_ASR.start()
-    server = aio.server(
-        futures.ThreadPoolExecutor(max_workers=SERVER_CONFIG.max_workers), 
-        options=[
-            ('grpc.keepalive_time_ms', 1000),
-            ('grpc.keepalive_timeout_ms', 1000),
-            ('grpc.keepalive_permit_without_calls', 1),
-            ('grpc.http2.max_pings_without_data', 0),
-        ]
-    )
+    server = aio.server(futures.ThreadPoolExecutor(max_workers=SERVER_CONFIG.max_workers))
 
-    speech_pb2_grpc.add_SpeechToTextServicer_to_server(SpeechToTextServicer(), server)
-    for port in SERVER_CONFIG.ports: #TODO: add secure port 
-        server.add_insecure_port(f'[::]:{port}')
+    speech_pb2_grpc.add_SpeechToTextServicer_to_server(StandardSpeechToTextServicer(), server)
+    speech_pb2_grpc.add_SpeechToTextWithHypothesisServicer_to_server(HypothesisSpeechToTextServicer(), server)
+
+    for port in SERVER_CONFIG.ports:
+        server.add_insecure_port(f"[::]:{port}")
 
     await server.start()
     LOGGER.info("Server started")
 
-    try: await server.wait_for_termination()
-    except KeyboardInterrupt: LOGGER.error("Interrupted")
-    finally: await server.stop(0)
+    try:
+        await server.wait_for_termination()
+    except KeyboardInterrupt:
+        LOGGER.error("Interrupted")
+    finally:
+        await server.stop(0)
 
 def main():
     asyncio.run(serve())
-

@@ -17,8 +17,17 @@ message Transcript {
   string text = 3;
 }
 
-// Bidirectional streaming
+message TranscriptWithHypothesis {
+  Transcript confirmed = 1;
+  Transcript hypothesis = 2;
+}
+
+// Bidirectional streaming without unconfirmed hypothesis 
 service SpeechToText {
   rpc StreamingRecognize(stream AudioChunk) returns (stream Transcript);
 }
 
+// Bidirectional streaming with unconfirmed hypothesis
+service SpeechToTextWithHypothesis {
+  rpc StreamingRecognizeWithHypothesis(stream AudioChunk) returns (stream TranscriptWithHypothesis);
+}

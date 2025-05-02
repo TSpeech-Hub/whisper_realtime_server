@@ -144,7 +144,8 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         super().__init__(asr)
         self.__logger = logger
         self.__result = None
-        self.buffer_trimming_sec = 10 #overwriting default trimming sec 
+        self.__hypothesis = None
+        self.buffer_trimming_sec = 15 #overwriting default trimming sec 
 
     @property
     def buffer_time_seconds(self):
@@ -167,21 +168,30 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         o = self.transcript_buffer.flush()
         self.commited.extend(o)
 
-        completed = self.to_flush(o)
-        self.__logger.debug(f">>>>COMPLETE NOW: {completed}")
+        self.__result = self.to_flush(o)
+        self.__logger.debug(f">>>>COMPLETE NOW: {self.__result}")
 
-        the_rest = self.to_flush(self.transcript_buffer.complete())
-        self.__logger.debug(f"INCOMPLETE: {the_rest}")
+        self.__hypothesis = self.to_flush(self.transcript_buffer.complete())
+        self.__logger.debug(f"INCOMPLETE: {self.__hypothesis}")
 
         self._chunk_buffer_at()
 
         self.__logger.info(f"len of buffer now: {self.buffer_time_seconds:2.2f}")
         self.__logger.debug("ITERATION END \n")
 
-        self.__result = self.to_flush(o)
+
+    @property
+    def hypothesis(self):
+        """
+        Returns the flushed unconfirmed part of the buffer.
+        """
+        return self.__hypothesis
 
     @property
     def results(self):
+        """ 
+        Returns the flushed confirmed part of the buffer.
+        """
         return self.__result
 
     def _chunk_buffer_at(self):
@@ -200,7 +210,6 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
             self.chunk_at(t)
 
 from typing import Dict
-from contextlib import contextmanager
 from dataclasses import dataclass
 
 @dataclass
@@ -297,7 +306,7 @@ class ParallelRealtimeASR():
         this function must be called in a thread specific for the parallel processing
         the other threads receveind the audio streams must push the audio chunks in the buffer and wait for the results 
         """
-        self.__logger.info("asr started")
+        self.__logger.info("Asr started")
         timestamp = time.time()
         try:
             while True:
@@ -309,7 +318,7 @@ class ParallelRealtimeASR():
                     self.__reset_ready_pids()
 
                     self.__logger.debug(f"Time lost waiting {time.time() - timestamp} seconds")
-                    self.__logger.info("Transcribing") #TODO:remove
+                    self.__logger.info("Transcribing") 
 
                     current_processors = self.__registered_pids.copy()
                     for processor_id in self.__registered_pids:
