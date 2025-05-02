@@ -5,9 +5,6 @@ import librosa
 from functools import lru_cache
 import logging
 
-import io
-import soundfile as sf
-import math
 from rapidfuzz import fuzz, utils
 
 logger = logging.getLogger(__name__)
@@ -23,8 +20,7 @@ def load_audio_chunk(fname, beg, end):
     end_s = int(end*16000)
     return audio[beg_s:end_s]
 
-
-# Whisper backend
+# Leave the hierarchy for possible extensions 
 
 class ASRBase:
 
@@ -51,51 +47,6 @@ class ASRBase:
 
     def use_vad(self):
         raise NotImplemented("must be implemented in the child class")
-
-
-class WhisperTimestampedASR(ASRBase):
-    """Uses whisper_timestamped library as the backend. Initially, we tested the code on this backend. It worked, but slower than faster-whisper.
-    On the other hand, the installation for GPU could be easier.
-    """
-
-    sep = " "
-
-    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        import whisper
-        import whisper_timestamped
-        from whisper_timestamped import transcribe_timestamped
-        self.transcribe_timestamped = transcribe_timestamped
-        if model_dir is not None:
-            logger.debug("ignoring model_dir, not implemented")
-        return whisper.load_model(modelsize, download_root=cache_dir)
-
-    def transcribe(self, audio, init_prompt=""):
-        result = self.transcribe_timestamped(self.model,
-                audio, language=self.original_language,
-                initial_prompt=init_prompt, verbose=None,
-                condition_on_previous_text=True, **self.transcribe_kargs)
-        return result
- 
-    def ts_words(self,r):
-        # return: transcribe result object to [(beg,end,"word1"), ...]
-        o = []
-        for s in r["segments"]:
-            for w in s["words"]:
-                t = (w["start"],w["end"],w["text"])
-                o.append(t)
-        return o
-
-    def segments_end_ts(self, res):
-        return [s["end"] for s in res["segments"]]
-
-    def use_vad(self):
-        self.transcribe_kargs["vad"] = True
-
-    def set_translate_task(self):
-        self.transcribe_kargs["task"] = "translate"
-
-
-
 
 class FasterWhisperASR(ASRBase):
     """Uses faster-whisper library as the backend. Works much faster, appx 4-times (in offline mode). For GPU, it requires installation with a specific CUDNN version.
@@ -156,92 +107,6 @@ class FasterWhisperASR(ASRBase):
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
 
-
-class OpenaiApiASR(ASRBase):
-    """Uses OpenAI's Whisper API for audio transcription."""
-
-    def __init__(self, lan=None, temperature=0, logfile=sys.stderr):
-        self.logfile = logfile
-
-        self.modelname = "whisper-1"  
-        self.original_language = None if lan == "auto" else lan # ISO-639-1 language code
-        self.response_format = "verbose_json" 
-        self.temperature = temperature
-
-        self.load_model()
-
-        self.use_vad_opt = False
-
-        # reset the task in set_translate_task
-        self.task = "transcribe"
-
-    def load_model(self, *args, **kwargs):
-        from openai import OpenAI
-        self.client = OpenAI()
-
-        self.transcribed_seconds = 0  # for logging how many seconds were processed by API, to know the cost
-        
-
-    def ts_words(self, segments):
-        no_speech_segments = []
-        if self.use_vad_opt:
-            for segment in segments.segments:
-                # TODO: threshold can be set from outside
-                if segment["no_speech_prob"] > 0.8:
-                    no_speech_segments.append((segment.get("start"), segment.get("end")))
-
-        o = []
-        for word in segments.words:
-            start = word.start
-            end = word.end
-            if any(s[0] <= start <= s[1] for s in no_speech_segments):
-                # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
-                continue
-            o.append((start, end, word.word))
-        return o
-
-
-    def segments_end_ts(self, res):
-        return [s.end for s in res.words]
-
-    def transcribe(self, audio_data, prompt=None, *args, **kwargs):
-        # Write the audio data to a buffer
-        buffer = io.BytesIO()
-        buffer.name = "temp.wav"
-        sf.write(buffer, audio_data, samplerate=16000, format='WAV', subtype='PCM_16')
-        buffer.seek(0)  # Reset buffer's position to the beginning
-
-        self.transcribed_seconds += math.ceil(len(audio_data)/16000)  # it rounds up to the whole seconds
-
-        params = {
-            "model": self.modelname,
-            "file": buffer,
-            "response_format": self.response_format,
-            "temperature": self.temperature,
-            "timestamp_granularities": ["word", "segment"]
-        }
-        if self.task != "translate" and self.original_language:
-            params["language"] = self.original_language
-        if prompt:
-            params["prompt"] = prompt
-
-        if self.task == "translate":
-            proc = self.client.audio.translations
-        else:
-            proc = self.client.audio.transcriptions
-
-        # Process transcription/translation
-        transcript = proc.create(**params)
-        logger.debug(f"OpenAI API processed accumulated {self.transcribed_seconds} seconds")
-
-        return transcript
-
-    def use_vad(self):
-        self.use_vad_opt = True
-
-    def set_translate_task(self):
-        self.task = "translate"
-
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
@@ -249,8 +114,6 @@ class HypothesisBuffer:
         self.buffer = []
         self.new = []
         self.fuzz_threshold = 95
-        self._confirm_threshold = 2 # > 0, if not confirmed anything for 2 times in a row, confirm it anyway
-        self._unconfirmed_count = 0 # count unconfrimed times
 
         self.last_commited_time = 0
         self.last_commited_word = None
@@ -310,18 +173,8 @@ class HypothesisBuffer:
             if len(self.buffer) == 0: break
 
             if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) >= self.fuzz_threshold:
-                self.__commit_and_pop([self.new[0]], 1, commit)
+                self.__commit_and_pop([self.new[0]], 1, commit) #TODO: extend confirmation logic
             else: break
-
-            """elif  self._unconfirmed_count > self._confirm_threshold-1:
-                if len(self.buffer) > 1 and fuzz.QRatio(nt, self.buffer[1][2], processor=utils.default_process):
-                    self.__commit_and_pop([self.new[0]], 2, commit)
-
-                elif len(self.buffer) > 1 and fuzz.QRatio(self.buffer[0][2], self.new[1][2], processor=utils.default_process):
-                        self.__commit_and_pop(self.new[:2], 1, commit)
-                else: break"""
-
-        if not commit: self._unconfirmed_count += 1
 
         self.buffer = self.new
         self.new = []

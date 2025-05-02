@@ -239,6 +239,12 @@ async def serve():
     PARALLEL_ASR.start()
     server = aio.server(
         futures.ThreadPoolExecutor(max_workers=SERVER_CONFIG.max_workers), 
+        options=[
+            ('grpc.keepalive_time_ms', 1000),
+            ('grpc.keepalive_timeout_ms', 1000),
+            ('grpc.keepalive_permit_without_calls', 1),
+            ('grpc.http2.max_pings_without_data', 0),
+        ]
     )
 
     speech_pb2_grpc.add_SpeechToTextServicer_to_server(SpeechToTextServicer(), server)
