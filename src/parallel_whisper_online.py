@@ -22,11 +22,11 @@ class ParallelAudioBuffer:
         if audio_lenth == 0:
             return
         buffer_length = self.size 
-    
+  
         self._segment_times.append({"start": buffer_length, "end":(buffer_length + audio_lenth)})
         self._ids.append(id)
         self._audio = np.append(self._audio, audio)
-        self._audio = np.append(self._audio, np.zeros(100, dtype=np.float32))
+        self._audio = np.append(self._audio, np.zeros(100, dtype=np.float32)) # add a zero to avoid the last segment to be cutted
 
     @property
     def size(self):
@@ -140,28 +140,20 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
     Implements new methods reusing the original OnlineASRProcessor code, keeping only the necessary modifications.
     """
 
-    def __init__(self, asr, logger=logging.getLogger(__name__)):
-        super().__init__(asr)
-        self.__logger = logger
+    def __init__(self, asr, logger=logging.getLogger(__name__), **kwargs):
+        super().__init__(asr, **kwargs)
+        self.logger = logger
+        self.buffer_trimming_sec = kwargs.get("buffer_trimming_sec", 15) # seconds to trim the buffer
         self.__result = None
         self.__hypothesis = None
-        self.buffer_trimming_sec = 15 #overwriting default trimming sec 
 
     @property
     def buffer_time_seconds(self):
         return len(self.audio_buffer)/self.SAMPLING_RATE
 
-    def flush_everything(self):
-        """
-        Flushes the buffer and returns the results.
-        """
-        self.__logger.debug("Flushing everything")
-        return self.to_flush(self.transcript_buffer.complete())
-
-
     def update(self, results):
-        self.__logger.debug("ITERATION START\n")
-        self.__logger.debug(f"transcribing {self.buffer_time_seconds:2.2f} seconds from {self.buffer_time_offset:2.2f}")
+        self.logger.debug("ITERATION START\n")
+        self.logger.debug(f"transcribing {self.buffer_time_seconds:2.2f} seconds from {self.buffer_time_offset:2.2f}")
 
         self.transcript_buffer.insert(results, self.buffer_time_offset)
 
@@ -169,15 +161,15 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         self.commited.extend(o)
 
         self.__result = self.to_flush(o)
-        self.__logger.debug(f">>>>COMPLETE NOW: {self.__result}")
+        self.logger.debug(f">>>>COMPLETE NOW: {self.__result}")
 
         self.__hypothesis = self.to_flush(self.transcript_buffer.complete())
-        self.__logger.debug(f"INCOMPLETE: {self.__hypothesis}")
+        self.logger.debug(f"INCOMPLETE: {self.__hypothesis}")
 
         self._chunk_buffer_at()
 
-        self.__logger.info(f"len of buffer now: {self.buffer_time_seconds:2.2f}")
-        self.__logger.debug("ITERATION END \n")
+        self.logger.info(f"len of buffer now: {self.buffer_time_seconds:2.2f}")
+        self.logger.debug("ITERATION END \n")
 
 
     @property
@@ -206,7 +198,7 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
             while k>0 and self.commited[k][1] > l:
                 k -= 1
             t = self.commited[k][1] 
-            self.__logger.debug(f"chunking segment at word {self.commited[-1]} at {t}")
+            self.logger.debug(f"chunking segment at word {self.commited[-1]} at {t}")
             self.chunk_at(t)
 
 from typing import Dict
@@ -285,7 +277,7 @@ class ParallelRealtimeASR():
             else: 
                 raise ValueError(f"{id} is not a registered processor.") 
 
-    async def wait(self):
+    async def wait(self): #TODO: implement service exclusion policy in case his fault in timeout
         try:
             await asyncio.wait_for(self.__transcription_event.wait(), timeout=2) 
         except asyncio.TimeoutError:
@@ -324,6 +316,7 @@ class ParallelRealtimeASR():
                     for processor_id in self.__registered_pids:
                         processor = self.__registered_pids[processor_id]
                         #result_holder["result"] = None 
+                        #self.__logger.debug(f"{processor_id}, {processor.asr_processor.buffer_time_seconds} seconds") 
                         self.append_audio(processor_id, processor.asr_processor.audio_buffer) 
                     self.__logger.debug(f"Shared buffer samples: {len(self.__audio_buffer)}")
 

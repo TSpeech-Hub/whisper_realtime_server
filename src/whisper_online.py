@@ -109,14 +109,18 @@ class FasterWhisperASR(ASRBase):
 
 class HypothesisBuffer:
 
-    def __init__(self, logfile=sys.stderr):
+    def __init__(self, logfile=sys.stderr, **kwargs):
         self.commited_in_buffer = []
         self.buffer = []
         self.new = []
-        self.fuzz_threshold = 95
-
+        # Confirmation logic args
         self.last_commited_time = 0
         self.last_commited_word = None
+        # Fuzzy Confirmation logic and fallback args
+        self.fuzz_threshold = kwargs.get("qratio_threshold", 95)
+        self.use_fallback = kwargs.get("use_fallback", False)
+        self.fallback_threshold = kwargs.get("fallback_threshold", 1)
+        self.unconfirmed_amount = 0
 
         self.logfile = logfile
 
@@ -135,11 +139,11 @@ class HypothesisBuffer:
                     # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in commited and new. If they are, they're dropped.
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
-                    for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum #TODO: why limited?
+                    for i in range(1,min(min(cn,nn),10)+1):  # 5 is the maximum #TODO: Make n-ngrams value dynamic (min 5)
                         c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
                         ratio = fuzz.QRatio(c, tail, processor=utils.default_process)  
-                        if ratio >= self.fuzz_threshold:
+                        if ratio > 98: #TODO: De-hardcode this value
                             words = []
                             for j in range(i):
                                 words.append(repr(self.new.pop(0)))
@@ -149,21 +153,47 @@ class HypothesisBuffer:
 
     ### Changes from the original code 
     #helper for flush not used in any other place
-    def __commit_and_pop(self, commit_word_list, num_buffer_pops, commit):
-        if not commit_word_list: return
+    def __commit_and_pop(self, num_new_pops, num_buffer_pops, commit):
+        if num_new_pops <= 0: return
 
-        for w in commit_word_list:
-            self.new.pop(0)
+        new_not_popped = self.new[:num_new_pops]
+        for w in new_not_popped:
             commit.append((w[0],w[1],w[2]))
-        self.last_commited_word = commit_word_list[-1][2] #nt
-        self.last_commited_time = commit_word_list[-1][1] #nb
+
+        self.last_commited_word = new_not_popped[-1][2] #nt
+        self.last_commited_time = new_not_popped[-1][1] #nb
+
+        self.new = self.new[num_new_pops:]
         self.buffer = self.buffer[num_buffer_pops:]
 
+    def __fallback(self, commit): #TODO: more inspection in further fallback logics 
+        if not self.buffer or not self.new: return
+        half = len(self.buffer) // 2
+
+        #TODO: consider half new instead of half byffer
+        prefixes = [" ".join([j[-1] for j in self.buffer[:i+1]]) for i in range(half+1)]
+        
+        max_score = 0
+        half_time = self.buffer[half][1] + 1
+        new_filterd = [e for e in self.new if e[1] <= half_time]
+        #best = { "buffer": "", "num_drops_buffer": 0,"new": "", "num_drops_new": 0,"score": 0,#} 
+        #uses a dict fot debugging purpose only
+        num_drops_buffer = 0
+        num_drops_new = 0
+
+        for i in range(len(new_filterd)):
+            for j, p in enumerate(prefixes): 
+                new_p = " ".join([k[-1] for k in self.new[:i+1]])
+                this_score = fuzz.QRatio(p, new_p)
+                if this_score > max_score: 
+                    max_score = this_score
+                    num_drops_buffer = j+1
+                    num_drops_new = i+1
+        #print(f"best: {best}") 
+        self.__commit_and_pop(num_drops_new, num_drops_buffer, commit)
 
     def flush(self):
         ### Changes from the original code for reduced delay at cost of more errors.
-        # returns commited chunk similar to (levenshtein distance) the longest common prefix of 2 last inserts. 
-        # if no confirmation for 3 times, it confirms it anyway
 
         commit = []
         while self.new:
@@ -172,8 +202,16 @@ class HypothesisBuffer:
             if len(self.buffer) == 0: break
 
             if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) >= self.fuzz_threshold:
-                self.__commit_and_pop([self.new[0]], 1, commit) #TODO: extend confirmation logic
+                self.__commit_and_pop(1, 1, commit) 
             else: break
+
+        if self.use_fallback and commit == []: 
+            if self.unconfirmed_amount >= self.fallback_threshold: 
+                self.__fallback(commit)
+                self.unconfirmed_amount = 0
+            else: 
+                self.unconfirmed_amount += 1
+        # never go true find why it breaks
 
         self.buffer = self.new
         self.new = []
@@ -191,7 +229,7 @@ class OnlineASRProcessor:
 
     SAMPLING_RATE = 16000
 
-    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr):
+    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr, **kwargs):
         """asr: WhisperASR object
         tokenizer: sentence tokenizer object for the target language. Must have a method *split* that behaves like the one of MosesTokenizer. It can be None, if "segment" buffer trimming option is used, then tokenizer is not used at all.
         ("segment", 15)
@@ -202,6 +240,8 @@ class OnlineASRProcessor:
         self.tokenizer = tokenizer
         self.logfile = logfile
 
+        self.kwargs = kwargs
+
         self.init()
 
         self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
@@ -209,7 +249,7 @@ class OnlineASRProcessor:
     def init(self, offset=None):
         """run this when starting or restarting processing"""
         self.audio_buffer = np.array([],dtype=np.float32)
-        self.transcript_buffer = HypothesisBuffer(logfile=self.logfile)
+        self.transcript_buffer = HypothesisBuffer(logfile=self.logfile, **self.kwargs)
         self.buffer_time_offset = 0
         if offset is not None:
             self.buffer_time_offset = offset
