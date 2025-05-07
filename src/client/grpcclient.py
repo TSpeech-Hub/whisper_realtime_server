@@ -173,6 +173,8 @@ def main():
     parser.add_argument('--chunk-duration', type=float, default=1.0)
     args = parser.parse_args()
     AudioConfig.chunk_duration = args.chunk_duration
+    AudioConfig.chunk_size = int(AudioConfig.sample_rate * AudioConfig.chunk_duration)
+
 
     client = TranscriptorClient(host=args.host, port=args.port, with_hypothesis=args.with_hypothesis, simulate_filepath=args.simulate, interactive=args.interactive)
     client.run()
