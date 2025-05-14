@@ -5,9 +5,6 @@ import librosa
 from functools import lru_cache
 import logging
 
-import io
-import soundfile as sf
-import math
 from rapidfuzz import fuzz, utils
 
 logger = logging.getLogger(__name__)
@@ -23,8 +20,7 @@ def load_audio_chunk(fname, beg, end):
     end_s = int(end*16000)
     return audio[beg_s:end_s]
 
-
-# Whisper backend
+# Leave the hierarchy for possible extensions 
 
 class ASRBase:
 
@@ -51,51 +47,6 @@ class ASRBase:
 
     def use_vad(self):
         raise NotImplemented("must be implemented in the child class")
-
-
-class WhisperTimestampedASR(ASRBase):
-    """Uses whisper_timestamped library as the backend. Initially, we tested the code on this backend. It worked, but slower than faster-whisper.
-    On the other hand, the installation for GPU could be easier.
-    """
-
-    sep = " "
-
-    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        import whisper
-        import whisper_timestamped
-        from whisper_timestamped import transcribe_timestamped
-        self.transcribe_timestamped = transcribe_timestamped
-        if model_dir is not None:
-            logger.debug("ignoring model_dir, not implemented")
-        return whisper.load_model(modelsize, download_root=cache_dir)
-
-    def transcribe(self, audio, init_prompt=""):
-        result = self.transcribe_timestamped(self.model,
-                audio, language=self.original_language,
-                initial_prompt=init_prompt, verbose=None,
-                condition_on_previous_text=True, **self.transcribe_kargs)
-        return result
- 
-    def ts_words(self,r):
-        # return: transcribe result object to [(beg,end,"word1"), ...]
-        o = []
-        for s in r["segments"]:
-            for w in s["words"]:
-                t = (w["start"],w["end"],w["text"])
-                o.append(t)
-        return o
-
-    def segments_end_ts(self, res):
-        return [s["end"] for s in res["segments"]]
-
-    def use_vad(self):
-        self.transcribe_kargs["vad"] = True
-
-    def set_translate_task(self):
-        self.transcribe_kargs["task"] = "translate"
-
-
-
 
 class FasterWhisperASR(ASRBase):
     """Uses faster-whisper library as the backend. Works much faster, appx 4-times (in offline mode). For GPU, it requires installation with a specific CUDNN version.
@@ -156,104 +107,20 @@ class FasterWhisperASR(ASRBase):
     def set_translate_task(self):
         self.transcribe_kargs["task"] = "translate"
 
-
-class OpenaiApiASR(ASRBase):
-    """Uses OpenAI's Whisper API for audio transcription."""
-
-    def __init__(self, lan=None, temperature=0, logfile=sys.stderr):
-        self.logfile = logfile
-
-        self.modelname = "whisper-1"  
-        self.original_language = None if lan == "auto" else lan # ISO-639-1 language code
-        self.response_format = "verbose_json" 
-        self.temperature = temperature
-
-        self.load_model()
-
-        self.use_vad_opt = False
-
-        # reset the task in set_translate_task
-        self.task = "transcribe"
-
-    def load_model(self, *args, **kwargs):
-        from openai import OpenAI
-        self.client = OpenAI()
-
-        self.transcribed_seconds = 0  # for logging how many seconds were processed by API, to know the cost
-        
-
-    def ts_words(self, segments):
-        no_speech_segments = []
-        if self.use_vad_opt:
-            for segment in segments.segments:
-                # TODO: threshold can be set from outside
-                if segment["no_speech_prob"] > 0.8:
-                    no_speech_segments.append((segment.get("start"), segment.get("end")))
-
-        o = []
-        for word in segments.words:
-            start = word.start
-            end = word.end
-            if any(s[0] <= start <= s[1] for s in no_speech_segments):
-                # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
-                continue
-            o.append((start, end, word.word))
-        return o
-
-
-    def segments_end_ts(self, res):
-        return [s.end for s in res.words]
-
-    def transcribe(self, audio_data, prompt=None, *args, **kwargs):
-        # Write the audio data to a buffer
-        buffer = io.BytesIO()
-        buffer.name = "temp.wav"
-        sf.write(buffer, audio_data, samplerate=16000, format='WAV', subtype='PCM_16')
-        buffer.seek(0)  # Reset buffer's position to the beginning
-
-        self.transcribed_seconds += math.ceil(len(audio_data)/16000)  # it rounds up to the whole seconds
-
-        params = {
-            "model": self.modelname,
-            "file": buffer,
-            "response_format": self.response_format,
-            "temperature": self.temperature,
-            "timestamp_granularities": ["word", "segment"]
-        }
-        if self.task != "translate" and self.original_language:
-            params["language"] = self.original_language
-        if prompt:
-            params["prompt"] = prompt
-
-        if self.task == "translate":
-            proc = self.client.audio.translations
-        else:
-            proc = self.client.audio.transcriptions
-
-        # Process transcription/translation
-        transcript = proc.create(**params)
-        logger.debug(f"OpenAI API processed accumulated {self.transcribed_seconds} seconds")
-
-        return transcript
-
-    def use_vad(self):
-        self.use_vad_opt = True
-
-    def set_translate_task(self):
-        self.task = "translate"
-
 class HypothesisBuffer:
 
-    def __init__(self, logfile=sys.stderr):
+    def __init__(self, logfile=sys.stderr, **kwargs):
         self.commited_in_buffer = []
         self.buffer = []
         self.new = []
-        self.fuzz_threshold = 95
-        self._confirm_threshold = 2 # > 0, if not confirmed anything for 2 times in a row, confirm it anyway
-        self._unconfirmed_count = 0 # count unconfrimed times
-
+        # Confirmation logic args
         self.last_commited_time = 0
         self.last_commited_word = None
+        # Fuzzy Confirmation logic and fallback args
+        self.fuzz_threshold = kwargs.get("qratio_threshold", 95)
+        self.use_fallback = kwargs.get("use_fallback", False)
+        self.fallback_threshold = kwargs.get("fallback_threshold", 1)
+        self.unconfirmed_amount = 0
 
         self.logfile = logfile
 
@@ -272,11 +139,11 @@ class HypothesisBuffer:
                     # it's going to search for 1, 2, ..., 5 consecutive words (n-grams) that are identical in commited and new. If they are, they're dropped.
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
-                    for i in range(1,min(min(cn,nn),5)+1):  # 5 is the maximum #TODO: why limited?
+                    for i in range(1,min(min(cn,nn),10)+1):  # 5 is the maximum #TODO: Make n-ngrams value dynamic (min 5)
                         c = " ".join([self.commited_in_buffer[-j][2] for j in range(1,i+1)][::-1])
                         tail = " ".join(self.new[j-1][2] for j in range(1,i+1))
                         ratio = fuzz.QRatio(c, tail, processor=utils.default_process)  
-                        if ratio >= self.fuzz_threshold:
+                        if ratio > 98: #TODO: De-hardcode this value
                             words = []
                             for j in range(i):
                                 words.append(repr(self.new.pop(0)))
@@ -286,22 +153,47 @@ class HypothesisBuffer:
 
     ### Changes from the original code 
     #helper for flush not used in any other place
-    def __commit_and_pop(self, commit_word_list, num_buffer_pops, commit):
-        if not commit_word_list: return
+    def __commit_and_pop(self, num_new_pops, num_buffer_pops, commit):
+        if num_new_pops <= 0: return
 
-        for w in commit_word_list:
-            self.new.pop(0)
+        new_not_popped = self.new[:num_new_pops]
+        for w in new_not_popped:
             commit.append((w[0],w[1],w[2]))
-        self.last_commited_word = commit_word_list[-1][2] #nt
-        self.last_commited_time = commit_word_list[-1][1] #nb
-        self.buffer = self.buffer[num_buffer_pops:]
-        self._unconfirmed_count = 0
 
+        self.last_commited_word = new_not_popped[-1][2] #nt
+        self.last_commited_time = new_not_popped[-1][1] #nb
+
+        self.new = self.new[num_new_pops:]
+        self.buffer = self.buffer[num_buffer_pops:]
+
+    def __fallback(self, commit): #TODO: more inspection in further fallback logics 
+        if not self.buffer or not self.new: return
+        half = len(self.buffer) // 2
+
+        #TODO: consider half new instead of half byffer
+        prefixes = [" ".join([j[-1] for j in self.buffer[:i+1]]) for i in range(half+1)]
+        
+        max_score = 0
+        half_time = self.buffer[half][1] + 1
+        new_filterd = [e for e in self.new if e[1] <= half_time]
+        #best = { "buffer": "", "num_drops_buffer": 0,"new": "", "num_drops_new": 0,"score": 0,#} 
+        #uses a dict fot debugging purpose only
+        num_drops_buffer = 0
+        num_drops_new = 0
+
+        for i in range(len(new_filterd)):
+            for j, p in enumerate(prefixes): 
+                new_p = " ".join([k[-1] for k in self.new[:i+1]])
+                this_score = fuzz.QRatio(p, new_p)
+                if this_score > max_score: 
+                    max_score = this_score
+                    num_drops_buffer = j+1
+                    num_drops_new = i+1
+        #print(f"best: {best}") 
+        self.__commit_and_pop(num_drops_new, num_drops_buffer, commit)
 
     def flush(self):
         ### Changes from the original code for reduced delay at cost of more errors.
-        # returns commited chunk similar to (levenshtein distance) the longest common prefix of 2 last inserts. 
-        # if no confirmation for 3 times, it confirms it anyway
 
         commit = []
         while self.new:
@@ -310,18 +202,16 @@ class HypothesisBuffer:
             if len(self.buffer) == 0: break
 
             if fuzz.QRatio(nt, self.buffer[0][2], processor=utils.default_process) >= self.fuzz_threshold:
-                self.__commit_and_pop([self.new[0]], 1, commit)
+                self.__commit_and_pop(1, 1, commit) 
             else: break
 
-            """elif  self._unconfirmed_count > self._confirm_threshold-1:
-                if len(self.buffer) > 1 and fuzz.QRatio(nt, self.buffer[1][2], processor=utils.default_process):
-                    self.__commit_and_pop([self.new[0]], 2, commit)
-
-                elif len(self.buffer) > 1 and fuzz.QRatio(self.buffer[0][2], self.new[1][2], processor=utils.default_process):
-                        self.__commit_and_pop(self.new[:2], 1, commit)
-                else: break"""
-
-        if not commit: self._unconfirmed_count += 1
+        if self.use_fallback and commit == []: 
+            if self.unconfirmed_amount >= self.fallback_threshold: 
+                self.__fallback(commit)
+                self.unconfirmed_amount = 0
+            else: 
+                self.unconfirmed_amount += 1
+        # never go true find why it breaks
 
         self.buffer = self.new
         self.new = []
@@ -339,7 +229,7 @@ class OnlineASRProcessor:
 
     SAMPLING_RATE = 16000
 
-    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr):
+    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr, **kwargs):
         """asr: WhisperASR object
         tokenizer: sentence tokenizer object for the target language. Must have a method *split* that behaves like the one of MosesTokenizer. It can be None, if "segment" buffer trimming option is used, then tokenizer is not used at all.
         ("segment", 15)
@@ -350,6 +240,8 @@ class OnlineASRProcessor:
         self.tokenizer = tokenizer
         self.logfile = logfile
 
+        self.kwargs = kwargs
+
         self.init()
 
         self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
@@ -357,7 +249,7 @@ class OnlineASRProcessor:
     def init(self, offset=None):
         """run this when starting or restarting processing"""
         self.audio_buffer = np.array([],dtype=np.float32)
-        self.transcript_buffer = HypothesisBuffer(logfile=self.logfile)
+        self.transcript_buffer = HypothesisBuffer(logfile=self.logfile, **self.kwargs)
         self.buffer_time_offset = 0
         if offset is not None:
             self.buffer_time_offset = offset

@@ -29,9 +29,6 @@ COPY resources /app/resources
 
 COPY requirements.txt /app/
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
-RUN pip install -U openai-whisper
-RUN pip install git+https://github.com/linto-ai/whisper-timestamped 
-RUN pip install --no-cache-dir grpcio grpcio-tools protobuf==5.29.0
 
 COPY src /app/src
 COPY Makefile /app/
@@ -40,4 +37,4 @@ COPY fix_proto_imports.py /app/
 
 RUN make proto
 
-CMD ["python3", "-u", "-m", "src.server"]
+CMD ["python3", "-u", "-m", "src.server", "--fallback"]

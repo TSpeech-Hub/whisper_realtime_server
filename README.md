@@ -6,7 +6,14 @@
 
 ## Installation
 
-### Building with Docker
+You can either build the server using Docker or set up a custom environment. but the nvidia developer kit is required to run the server with any configurations.
+
+### Nvidia Developer Kit
+
+The Nvidia Developer Kit is required for GPU support. The server has been tested with CUDA 12.X and cuDNN 9, as specified in the Dockerfile. The Whisper Streaming project has been tested with CUDA 11.7 and cuDNN 8.5.0, so it is recommended to use at least CUDA 11.7 and cuDNN 8.5.0.&#x20;
+
+<details>
+   <summary><h2>Building with Docker</h2></summary>
 
 #### Prerequisites
 
@@ -15,11 +22,16 @@ Make sure Docker is installed. Follow the official [Docker Installation Guide](h
 Clone the repository:
 
 ```bash
-git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
-cd whisper_realtime_server
+git git clone https://github.com/dariopellegrino00/whisper_realtime_server.git
 ```
 
 #### Before builing using docker
+
+1. Navigate to the project root directory:
+
+   ```bash
+   cd whisper_realtime_server
+   ```
 
 - When built, you will be able to test the server with your mic or a simulation of realtime audio streaming using audio files
 - there are already two audio examples in the resources folder, if you want to add new ones, then **BEFORE** the next steps, add the audio files to `whisper_realtime_server/resources`
@@ -41,10 +53,10 @@ cd whisper_realtime_server
 3. Run the Docker container with GPU support and port mapping:
 
    ```bash
-   docker run --gpus all -p 50051:50051 --name whisper_server whisper_realtime_server
+   docker run --gpus all -p 50051-50052:50051-50052 --name whisper_server whisper_realtime_server
    ```
-   - You can change the port range `50051:50051` if needed. Remember to change port on `whisper_server.py` and `gprcclient.py`.
-   - The server is now running and ready to accept connections. You can access it at port `50051` using the `grpcclient.py` script.
+   - You can change the port range `50051-50052:50051-50052` if needed, these are the server's default. You can use the parameters to customize the Dockerfile server startup command, check available args in the **Running the server** section below. By default, only the `--fallback` arg is passed to the server, to enable fallback logic.
+   - The server is now running and ready to accept connections. You can access it at port `50051` and `50052` using the `grpcclient.py` script.
 
 4. To stop the Docker container:
 
@@ -57,10 +69,32 @@ cd whisper_realtime_server
    ```bash
    docker start whisper_server
    ```
+</details>
+<details>
+   <summary><h2>Custom Environment</h2></summary>
 
-### Running the test client
+Install all dependencies: 
+- I suggest the use of python enviroments: [Python Enviroments](https://docs.python.org/3/library/venv.html)
+- Check Dockerfile for addictional OS packages you may miss mainly for client side microphone support. (Linux only)
 
-if you want to run the client directly in the docker container follow these steps:
+1. Install the requirements.txt:
+   In the project root directory execute
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Generate the pytgon-grpc files for grpc:
+   ```bash
+   make proto
+   ```
+</details>
+
+## gRPC client
+
+<details>
+     <summary><h3>Running the test client using docker</h3></summary>
+
+if you followed the `Building with Docker` section and you want to run the client directly in the docker container follow these steps:
 
 1. Ensure the container in running:
 
@@ -68,7 +102,7 @@ if you want to run the client directly in the docker container follow these step
    docker ps 
    ```
 
-   if you see whisper_server listed then you are good to go, otherwise start the container 
+   if you see whisper-server listed then you are good to go, otherwise start the container :
 
    ```bash
    docker start whisper_server
@@ -86,22 +120,32 @@ if you want to run the client directly in the docker container follow these step
    root@<imageid>:/app/src# 
    ```
 
-3. Run the grpc client
+   Now toy can run the client following the next step.
+   </details>
 
-   - Run the client using your system microphone:
+   ### Running the client
+
+   Tf you setup a custom enviroment navigate to the project root directory (see previus step if you want to run the client directly in docker container)
+   
+   The test client provided is linux only compatible, an all OS compatible client is in the works.
+   Run the client using your system microphone:
+
       ```bash
       python3 -m src.client
       ```
-   - All the possible options
-      ```bash
-      options:
-        -h, --help           show this help message and exit
-        --host HOST          gRPC server address
-        --port PORT          gRPC server port
-        --simulate SIMULATE  Simulation mode: Path to the audio file to simulate a realtime audio
-                             stream with
-        --interactive        Display transcript updates interactively on a single line
-      ```
+
+   All the possible options:
+   ```
+   --host HOST          gRPC server address
+   --port PORT          gRPC server port
+   --with-hypothesis    Display hypothesis updates along with the final transcript
+   --simulate SIMULATE  Simulation mode: Path to the audio file to simulate a realtime audio
+                        stream with
+   --interactive        Display transcript updates interactively on a single line
+   --chunk-duration     Change the chunk duration (in seconds) for the audio stream
+   ```
+
+      Example with confirmed only tokens:
 
       Standard output:
       ```
@@ -117,24 +161,54 @@ if you want to run the client directly in the docker container follow these step
       How are you? 
       ```
 
-### Custom Environment
+      To have some good visualization of the real-time transcription i suggest to use the service returning hypothesis `with-hypothesis` and `interactive`. To have more frequent responses with low a client number (1 to 5 approx) set `chunk_duration` at `0.5`.  
 
-> [!IMPORTANT]
-> TODO 
+## gRPC whisper server: 
 
-## Whisper Server Config File JSON Tutorial
-
-> [!CAUTION]
-> For now, avoid modifying the `config.json` file. If you need to experiment, it is advisable to only adjust the model size parameter.
-
-## Num Workers and Token Confirmation Threshold
-
-> [!IMPORTANT]
-> TODO: tweaking tutorial and explanation
-
-## Nvidia Developer Kit
-
-The Nvidia Developer Kit is required for GPU support. The server has been tested with CUDA 12.X and cuDNN 9, as specified in the Dockerfile. The Whisper Streaming project has been tested with CUDA 11.7 and cuDNN 8.5.0, so it is recommended to use at least CUDA 11.7 and cuDNN 8.5.0.&#x20;
+   ### Running the server
+   ```bash
+   python3 -m src.server <options>
+   ```
+   The server is running and ready to accept connections. You can later customize the server models, behavior and other options using the command line arguments. Check the `--help` option for more details:
+   ```
+   --fallback            Enable fallback logic when similarity local agreement
+                        fails for a mltitude of times
+   --fallback-threshold FALLBACK_THRESHOLD
+                        threshold t for fallback logic after t+1 similarity local
+                        agreement fails (ignored if --fallback is not set)
+   --qratio-threshold QRATIO_THRESHOLD
+                        Threshold for qratio to confirm and insert new words
+                        using the hypothesis buffer (between 0 and 100), lower
+                        values than 90 are not recommended
+   --buffer-trimming-sec BUFFER_TRIMMING_SEC
+                        Buffer trimming is the threshold in seconds that triggers
+                        the service processor audio buffer to be trimmed. This is
+                        useful to avoid memory leaks and to keep the buffer size
+                        under control. Default value is 15 seconds
+   --ports PORTS [PORTS ...]
+                        Ports to run the server on
+   --max-workers MAX_WORKERS
+                        Max workers for the server
+   --log-every-processor
+                        Log every processor in a separate file
+   --model {tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo,turbo}
+                        Name size of the Whisper model to use (default:
+                        large-v2). The model is automatically downloaded from the
+                        model hub if not present in model cache dir
+   --model-cache-dir MODEL_CACHE_DIR
+                        Directory for the whisper model caching
+   --model-dir MODEL_DIR
+                        Directory for a custom ct2 whisper model skipping if
+                        --model provided
+   --warmup-file WARMUP_FILE
+                        File to warm up the model and speed up the first request
+   --lan LAN             Language for the whisper model to translate to (unused at
+                        the moment)
+   --vad                 Use VAD for the model (unused at the moment)
+   --log-level LOG_LEVEL
+                        Log level for the server (DEBUG, INFO, WARNING, ERROR,
+                        CRITICAL) unused at the moment
+   ```
 
 ## Documentation
 
@@ -143,75 +217,17 @@ The Nvidia Developer Kit is required for GPU support. The server has been tested
 
 Before setting up your own client, it's important to understand the server architecture. The client first connects to a GRPC server on the default port (`50051`). After connecting, the GRPC server assigns a service to the client. Then the client streams audio data to this port, and receives real-time transcriptions.&#x20;
 
-## Testing the server locally
-
-Install all dependencies: 
-- I suggest the use of python enviroments: [Python Enviroments](https://docs.python.org/3/library/venv.html)
-- Check Dockerfile for addictional OS packages you may miss
-- An actual better tutorial for local installations is in the TODO list
-
-1. Install the requirements.txt:
-   In the project root directory execute
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Generate the pytgon-grpc files for grpc:
-   ```bash
-   make proto
-   ```
-
-2. Navigate to the `src` directory:
-
-   Inside the repository folder get in `src`, run:
-   ```bash
-   cd src
-   ```
-
-3. Run the server directly with Python:
-
-   ```bash
-   python3 -m src.server
-   ```
-
-4. To use a microphone for audio input:
-
-   ```bash
-   python3 -m src.client
-   ```
-
-   Check the docker section for client running options
 
 ## Credits
 
 - This project uses parts of the Whisper Streaming project. Other projects involved in whisper streaming are credited in their repo, check it out: [whisper streaming](https://github.com/ufal/whisper_streaming)
 - Credits also to: [faster whisper](https://github.com/SYSTRAN/faster-whisper)
 
-## Contributing
-
-This project is still in an early stage of development, and there may be significant bugs or issues. All contributions are welcome and greatly appreciated!
-If you'd like to contribute, here's how you can help:
-
-- **Fork** the repository.
-- Create a **new branch** for your feature or bug fix.
-- Submit a **pull request** with a clear description of your changes.
-
-For major changes, please open an **issue** first to discuss what you'd like to change.
-Thank you for helping improve this project and making it better for everyone!
-
-## TODO
-- [x] Rapidfuzz token confirmation 
-- [x] grpc implementation
-- [ ] Secure grpc connections
-- [ ] Custom enviroment setup
-- [ ] remove unused packages in Dockerfile and requirements 
-
 ## FIXED 
-- [x] Server fail to always return indipendent ports on concurrent requests now fixed
 - [x] Send back last confirmed token when client send silent audio for a prolonged time (or no human speech audio)
 - [x] Rarely other client words can end in others buffer 
 - [x] `MultiProcessingFasterWhisperASR` and the Grpc Speech to text services can get stuck with high number of streaming active concurrently (10 to 20)
 - [x] ValueError(f"{id} is not a registered processor.") at end of services
 
-## KNOWN BUGS - UNKNOWN CAUSE
-- [ ] Random words like `ok` or `thank you` are transcribed when client stays silent 
+## KNOWN BUGS
+- [ ] Random words like `ok` or `thank you` are transcribed when client stays silent (VAD is missing)
