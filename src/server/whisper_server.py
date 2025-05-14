@@ -75,6 +75,7 @@ class ProcessorManager:
             yield
         except Exception as e:
             self.server_logger.error(f"Exception in ProcessorManager {self.id}: ") 
+            self.server_logger.exception(e)
         finally:
             self.__shared_asr.unregister_processor(self.id)
             self.server_logger.debug(f"{self.id} finished processing")
@@ -145,11 +146,14 @@ class StandardSpeechToTextServicer(speech_pb2_grpc.SpeechToTextServicer):
         async with processor_manager.context():
             while not request_task.done():
                 if processor_manager.audio_queue.empty():
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.001)
                     continue
                 await processor_manager.insert_audio()
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.001)
                 self.__shared_asr.set_processor_ready(id)
+
+                # can happen that a new chunk is reveived after async waiting 
+                await processor_manager.insert_audio()
                 await self.__shared_asr.wait()
                 transcript = processor_manager.processor.results
                 if transcript:
@@ -183,12 +187,15 @@ class HypothesisSpeechToTextServicer(speech_pb2_grpc.SpeechToTextWithHypothesisS
         async with processor_manager.context():
             while not request_task.done():
                 if processor_manager.audio_queue.empty():
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.001)
                     continue
                 await processor_manager.insert_audio()
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.001)
                 self.__shared_asr.set_processor_ready(id)
+
+                await processor_manager.insert_audio()
                 await self.__shared_asr.wait()
+
                 t = processor_manager.processor.results
                 h = processor_manager.processor.hypothesis
                 ok_t, fmt_t = transcript_manager.format_transcript(t)
