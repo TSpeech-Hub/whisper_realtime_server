@@ -29,5 +29,5 @@ service SpeechToText {
 
 // Bidirectional streaming with unconfirmed hypothesis
 service SpeechToTextWithHypothesis {
-  rpc StreamingRecognizeWithHypothesis(stream AudioChunk) returns (stream TranscriptWithHypothesis);
+  rpc StreamingRecognize(stream AudioChunk) returns (stream TranscriptWithHypothesis);
 }

@@ -1,5 +1,9 @@
 import asyncio
-import numpy as np, logging, os, threading, time, copy
+import numpy as np
+import logging
+import os
+import time
+import copy
 from types import SimpleNamespace
 from src.whisper_online import *
 
@@ -144,8 +148,8 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         super().__init__(asr, **kwargs)
         self.logger = logger
         self.buffer_trimming_sec = kwargs.get("buffer_trimming_sec", 15) # seconds to trim the buffer
-        self.__result = None
-        self.__hypothesis = None
+        self._result = None
+        self._hypothesis = None
 
     @property
     def buffer_time_seconds(self):
@@ -160,31 +164,30 @@ class ParallelOnlineASRProcessor(OnlineASRProcessor):
         o = self.transcript_buffer.flush()
         self.commited.extend(o)
 
-        self.__result = self.to_flush(o)
-        self.logger.debug(f">>>>COMPLETE NOW: {self.__result}")
+        self._result = self.to_flush(o)
+        self.logger.debug(f">>>>COMPLETE NOW: {self._result}")
 
-        self.__hypothesis = self.to_flush(self.transcript_buffer.complete())
-        self.logger.debug(f"INCOMPLETE: {self.__hypothesis}")
+        self._hypothesis = self.to_flush(self.transcript_buffer.complete())
+        self.logger.debug(f"INCOMPLETE: {self._hypothesis}")
 
         self._chunk_buffer_at()
 
         self.logger.info(f"len of buffer now: {self.buffer_time_seconds:2.2f}")
         self.logger.debug("ITERATION END \n")
 
-
     @property
     def hypothesis(self):
         """
         Returns the flushed unconfirmed part of the buffer.
         """
-        return self.__hypothesis
+        return self._hypothesis
 
     @property
     def results(self):
         """ 
         Returns the flushed confirmed part of the buffer.
         """
-        return self.__result
+        return self._result
 
     def _chunk_buffer_at(self):
         """
@@ -211,132 +214,103 @@ class RegisteredProcess():
     asr_processor : ParallelOnlineASRProcessor 
     ready_flag : bool = False
 
-class ParallelRealtimeASR():
-    """Implements an adaptation of whisper streaming parallelized to process multiple clients.
+class ParallelRealtimeASR:
+    def __init__(self, modelsize="large-v3-turbo", logger=None, warmup_file=None):
+        self._registered_pids: Dict[int, RegisteredProcess] = {}
+        self._register_lock = asyncio.Lock()
+        self._transcription_event = asyncio.Event()
+        self._audio_buffer = ParallelAudioBuffer()
+        self._logger = logger if logger is not None else logging.getLogger(__name__)
+        self._asr = MultiProcessingFasterWhisperASR("auto", modelsize=modelsize, logfile=self._logger)
+        self._stopped = False
+        self._loop_task = None
 
-    An instance of this class will run on a separate thread 
-
-    How to use:
-    1. Create an instance of this class
-    2. start the instance with the start method
-    3. Register the processors with the register_processor method when they connect
-    4. Set the processor ready with the set_processor_ready method when a processor has received new audio
-    5. Wait for the transcription to be done with the wait method
-    6. Get the results from the result_holder dict shared with the processor
-    7. Unregister the processor with the unregister_processor method when the client disconnects
-
-    Multiple processors can be registered at the same time, running asynchronously. 
-    The asr will handle synchronization and transcription of the audio streams.
-
-    Check out whisper_server.py for an example of this class usage.
-
-    """
-
-    def __init__(self, modelsize="large-v3-turbo", logger=logging.getLogger(__name__), warmup_file=None): # type specified for a more comprehensive code 
-        self.__registered_pids: Dict[int, RegisteredProcess] = {} # dict of {processor_id; (processor, result_holder)}
-        self.__register_lock = threading.RLock()
-        self.__transcription_event = asyncio.Event()
-        self.__audio_buffer = ParallelAudioBuffer()
-        self.__logger = logger
-        self.__thread = threading.Thread(target=self.__asr_loop, args=(), daemon=True)
-        self.__asr = MultiProcessingFasterWhisperASR("auto", modelsize=modelsize, logfile=logger) 
-        self.__logger.info("asr created") 
         if warmup_file:
-            self.__asr.warmup(warmup_file)
+            self._asr.warmup(warmup_file)
 
     @property
     def asr(self):
-        """
-        this is only for parallel asr processors creation
-        wont be used for inference, just for whisper-streaming legacy code
-        do not use the asr object outside this class to avoid issues
-        """
-        return self.__asr
+        return self._asr
 
-    def register_processor(self, id, asr_processor):
-        with self.__register_lock:
-            self.__registered_pids[id] = RegisteredProcess(
+    async def start(self):
+        self._loop_task = asyncio.create_task(self._asr_loop())
+
+    async def stop(self):
+        self._stopped = True
+        if self._loop_task:
+            await self._loop_task
+
+    async def register_processor(self, id, asr_processor):
+        async with self._register_lock:
+            self._registered_pids[id] = RegisteredProcess(
                 asr_processor=asr_processor,
                 ready_flag=False,
             )
 
-    def unregister_processor(self, id):
-        with self.__register_lock:
-            return self.__registered_pids.pop(id)
+    async def unregister_processor(self, id):
+        async with self._register_lock:
+            return self._registered_pids.pop(id, None)
 
-    def append_audio(self, id, audio): 
-        self.__audio_buffer.append_token(id, audio)
+    def append_audio(self, id, audio):
+        self._audio_buffer.append_token(id, audio)
 
-    def start(self):
-        self.__thread.start()
+    async def set_processor_ready(self, id):
+        async with self._register_lock:
+            if id in self._registered_pids:
+                self._registered_pids[id].ready_flag = True
+            else:
+                raise ValueError(f"{id} is not a registered processor.")
 
-    def set_processor_ready(self, id):
-        with self.__register_lock:
-            if id in self.__registered_pids:
-                self.__registered_pids[id].ready_flag = True
-            else: 
-                raise ValueError(f"{id} is not a registered processor.") 
-
-    async def wait(self): #TODO: implement service exclusion policy in case his fault in timeout
+    async def wait(self):
         try:
-            await asyncio.wait_for(self.__transcription_event.wait(), timeout=2) 
+            await asyncio.wait_for(self._transcription_event.wait(), timeout=2)
         except asyncio.TimeoutError:
-            self.__logger.error("Timeout waiting for transcription")
+            self._logger.error("Timeout waiting for transcription")
 
-    def __all_pid_ready(self):
-        with self.__register_lock:
-            return len(self.__registered_pids) > 0 and all([x.ready_flag for x in self.__registered_pids.values()])
+    async def _all_pid_ready(self):
+        async with self._register_lock:
+            return len(self._registered_pids) > 0 and all(x.ready_flag for x in self._registered_pids.values())
 
-    def __reset_ready_pids(self):
-        with self.__register_lock:
-            for key in self.__registered_pids: 
-                self.__registered_pids[key].ready_flag = False
+    async def _reset_ready_pids(self):
+        async with self._register_lock:
+            for pid in self._registered_pids:
+                self._registered_pids[pid].ready_flag = False
 
-    def __asr_loop(self):
-        """
-        realtime parallel asr loop
-        this function must be called in a thread specific for the parallel processing
-        the other threads receveind the audio streams must push the audio chunks in the buffer and wait for the results 
-        """
-        self.__logger.info("Asr started")
+    async def _asr_loop(self):
+        self._logger.info("ASR loop started")
         timestamp = time.time()
+
         try:
-            while True:
-                self.__transcription_event.clear()
+            while not self._stopped:
+                self._transcription_event.clear()
 
-                with self.__register_lock: #If everyone is here trascribe
-                    if not self.__all_pid_ready(): 
-                        continue
-                    self.__reset_ready_pids()
+                if not await self._all_pid_ready():
+                    await asyncio.sleep(0.001)
+                    continue
 
-                    self.__logger.debug(f"Time lost waiting {time.time() - timestamp} seconds")
-                    self.__logger.info("Transcribing") 
+                await self._reset_ready_pids()
 
-                    current_processors = self.__registered_pids.copy()
-                    for processor_id in self.__registered_pids:
-                        processor = self.__registered_pids[processor_id]
-                        #result_holder["result"] = None 
-                        #self.__logger.debug(f"{processor_id}, {processor.asr_processor.buffer_time_seconds} seconds") 
-                        self.append_audio(processor_id, processor.asr_processor.audio_buffer) 
-                    self.__logger.debug(f"Shared buffer samples: {len(self.__audio_buffer)}")
-
-                # this will block until the transcribe is done can take more than 1 second
-                results = self.__asr.transcribe_parallel(self.__audio_buffer)
-                self.__audio_buffer.reset()
-
-                with self.__register_lock: 
-                    for (processor_id, result) in results:
-                        processors = current_processors[processor_id]
-                        processors.asr_processor.update(result) 
-                        self.__logger.debug(f"Result {processor_id}: {processors.asr_processor.results}")
-
-                self.__transcription_event.set()
+                self._logger.debug(f"Time lost waiting {time.time() - timestamp} seconds")
+                self._logger.info("Transcribing")
                 timestamp = time.time()
 
-        except KeyboardInterrupt:
-            self.__logger.info("Interrupted")
-            return 
-        except Exception as e: #TODO: restart the asr properly in case of error
-            self.__logger.exception(e)
-            return
+                async with self._register_lock:
+                    current_processors = self._registered_pids.copy()
+                    for pid, processor in self._registered_pids.items():
+                        self.append_audio(pid, processor.asr_processor.audio_buffer)
 
+                loop = asyncio.get_running_loop()
+                results = await loop.run_in_executor(None, self._asr.transcribe_parallel, self._audio_buffer)
+                self._audio_buffer.reset()
+
+                async with self._register_lock:
+                    for processor_id, result in results:
+                        processor = current_processors[processor_id]
+                        processor.asr_processor.update(result)
+                        self._logger.debug(f"Result {processor_id}: {processor.asr_processor.results}")
+
+                self._transcription_event.set()
+                timestamp = time.time()
+
+        except Exception as e:
+            self._logger.exception(e)

@@ -5,15 +5,33 @@ import grpc
 import sounddevice as sd
 import librosa
 import sys
+import numpy as np
 
 from src.generated import speech_pb2_grpc, speech_pb2
 
+
+#WARNING: This code is just a test client for testing the multiclient realtime whisper server  
+
 # Audio configuration
 class AudioConfig:
-    sample_rate = 16000 
-    chunk_duration = 1 
+    sample_rate = 16000  # Whisper wants 16 kHz
+    chunk_duration = 1.0  # seconds
     channels = 1
-    chunk_size = int(sample_rate * chunk_duration)  
+    sample_format = np.int16  # 16-bit PCM
+    max_abs_value = np.iinfo(sample_format).max  # 32767
+
+    @classmethod
+    def chunk_size(cls):
+        return int(cls.chunk_duration * cls.sample_rate)
+
+    @classmethod
+    def chunk_samples(cls):
+        "same as chunk_size()"
+        return int(cls.chunk_duration * cls.sample_rate)
+
+    @classmethod
+    def chunk_bytes(cls):
+        return cls.chunk_samples() * np.dtype(cls.sample_format).itemsize
 
 # gRPC client for transcription
 class TranscriptorClient:
@@ -30,9 +48,9 @@ class TranscriptorClient:
         total_samples = len(audio_data)
         print(f"Loaded {total_samples} samples from file {self.simulate_filepath}")
         # Split into 1-second chunks
-        for i in range(0, total_samples, AudioConfig.chunk_size):
-            chunk = audio_data[i:i+AudioConfig.chunk_size]
-            #if len(chunk) < AudioConfig.chunk_size and len(audio_data) - i+AudioConfig.chunk_size:
+        for i in range(0, total_samples, AudioConfig.chunk_size()):
+            chunk = audio_data[i:i+AudioConfig.chunk_size()]
+            #if len(chunk) < AudioConfig.chunk_size() and len(audio_data) - i+AudioConfig.chunk_size():
                 # Skip incomplete last chunk
                 #break
             yield speech_pb2.AudioChunk(samples=chunk.tolist())
@@ -44,10 +62,10 @@ class TranscriptorClient:
         print("Capturing real-time audio from the microphone...")
         with sd.InputStream(channels=AudioConfig.channels,
                             samplerate=AudioConfig.sample_rate,
-                            blocksize=AudioConfig.chunk_size) as stream:
+                            blocksize=AudioConfig.chunk_size()) as stream:
             while True:
                 # Read a chunk from the microphone (returns a tuple (data, overflow_flag))
-                audio_data, _ = stream.read(AudioConfig.chunk_size)
+                audio_data, _ = stream.read(AudioConfig.chunk_size())
                 # Flatten the array (assuming mono audio)
                 chunk_samples = audio_data.flatten()
                 yield speech_pb2.AudioChunk(samples=chunk_samples.tolist())
@@ -126,7 +144,7 @@ class TranscriptorClient:
         audio_generator = self.generate_audio_chunks()
 
         # Start the bidirectional call
-        responses = stub.StreamingRecognizeWithHypothesis(audio_generator)
+        responses = stub.StreamingRecognize(audio_generator)
         try:
             if self.interactive:
                 confirmed_text = ""
@@ -173,8 +191,6 @@ def main():
     parser.add_argument('--chunk-duration', type=float, default=1.0)
     args = parser.parse_args()
     AudioConfig.chunk_duration = args.chunk_duration
-    AudioConfig.chunk_size = int(AudioConfig.sample_rate * AudioConfig.chunk_duration)
-
 
     client = TranscriptorClient(host=args.host, port=args.port, with_hypothesis=args.with_hypothesis, simulate_filepath=args.simulate, interactive=args.interactive)
     client.run()
