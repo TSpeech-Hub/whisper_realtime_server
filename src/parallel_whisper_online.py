@@ -224,6 +224,8 @@ class ParallelRealtimeASR:
         self._asr = MultiProcessingFasterWhisperASR("auto", modelsize=modelsize, logfile=self._logger)
         self._stopped = False
         self._loop_task = None
+        self._last_transcript_time_seconds = 0.0  # last transcription time
+        self._transcript_timeout_seconds = 2.0  # default timeout for transcription
 
         if warmup_file:
             self._asr.warmup(warmup_file)
@@ -263,7 +265,8 @@ class ParallelRealtimeASR:
 
     async def wait(self):
         try:
-            await asyncio.wait_for(self._transcription_event.wait(), timeout=2)
+            timeout = max(self._transcript_timeout_seconds, len(self._registered_pids)*0.15)  
+            await asyncio.wait_for(self._transcription_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             self._logger.error("Timeout waiting for transcription")
 
@@ -289,8 +292,8 @@ class ParallelRealtimeASR:
                     continue
 
                 await self._reset_ready_pids()
-
-                self._logger.debug(f"Time lost waiting {time.time() - timestamp} seconds")
+                waiting_time = time.time() - timestamp
+                self._logger.debug(f"Time lost waiting {waiting_time} seconds")
                 self._logger.info("Transcribing")
                 timestamp = time.time()
 
@@ -310,6 +313,10 @@ class ParallelRealtimeASR:
                         self._logger.debug(f"Result {processor_id}: {processor.asr_processor.results}")
 
                 self._transcription_event.set()
+                last_transcription_time_seconds = self._last_transcript_time_seconds
+                self._last_transcript_time_seconds = time.time() - timestamp
+                self._transcript_timeout_seconds = last_transcription_time_seconds*0.8 + self._last_transcript_time_seconds + waiting_time # 80% of the last transcription time 
+
                 timestamp = time.time()
 
         except Exception as e:
