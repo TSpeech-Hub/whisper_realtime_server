@@ -66,7 +66,7 @@ class WhispStreamSession(StreamSession):
         try:
             async for audio_chunk in request_iterator:
                 audio_samples = np.frombuffer(audio_chunk.audio_bytes, dtype=np.float32)
-                await self.processor_manager.audio_queue.put(audio_samples) # TODO: change audio_chunk.samples
+                await self.processor_manager.audio_queue.put(audio_samples)
         except Exception as e:
             self.processor_manager.logger.error(f"Exception in request_enqueuer {self.processor_manager.id}: {e}")
 
